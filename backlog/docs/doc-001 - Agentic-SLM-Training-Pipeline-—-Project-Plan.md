@@ -3,7 +3,7 @@ id: doc-001
 title: Agentic SLM Training Pipeline — Project Plan
 type: specification
 created_date: '2026-08-19 22:12'
-updated_date: '2026-08-20 06:33'
+updated_date: '2026-08-20 23:25'
 ---
 # Agentic SLM Training Pipeline — Project Plan
 
@@ -33,10 +33,16 @@ Key principle: **small scale, not a degraded approach.** We use the same modern 
 - Includes training **our own BPE tokenizer**.
 - Full pipeline: pretrain → long-context extension → SFT → RL.
 
-### Track B — Optional (fine-tune a pretrained SLM)
-- Take a **pretrained** small model and fine-tune it for agentic behavior.
-- **Skippable:** Track A already covers the same stages (SFT, RL, serve, eval) from scratch.
-- Kept only as an optional shortcut / comparison if wanted later.
+### Track B — PEFT / LoRA (optional, distinct learning goal)
+- **Goal:** learn **parameter-efficient fine-tuning (PEFT)** — LoRA (core) + LoRA-like methods (QLoRA, DoRA, adapters) — which Track A (full fine-tuning) does **not** cover.
+- **The two tracks now differ by fine-tuning *method*, not just base:**
+  - Track A = **full fine-tuning** (update all weights) on our from-scratch 50M/150M.
+  - Track B = **PEFT** (freeze the base, train only low-rank adapters ≈ 1% of params) on a pretrained base.
+- **Base:** a pretrained MLX model (default **Qwen3-1.7B**; QLoRA's 4-bit base unlocks up to ~27B on 48GB). Public `mlx-community` models.
+- **Architecturally pluggable (adapter pattern):** one `PEFTMethod` interface; LoRA / QLoRA / DoRA / Adapter each implement it; a **method-agnostic trainer** resolves the method via a registry. Adding a method = implement the interface + register it. The LoRA impl **mirrors the `mlx_lm` interface** (same config, `lora_a`/`lora_b`, `alpha/rank` scaling, adapter format) so adapters are interchangeable with `mlx_lm.lora`.
+- **Full pipeline (mirrors Track A):** SFT → RL (GRPO on the adapters) → serve → eval. Same shape as Track A, different fine-tuning method.
+- **Cross-track reuse:** the PEFT framework is **shared** — it can also fine-tune our own 50M/150M, giving a **clean ablation** (PEFT vs full-FT, same base/arch/tokenizer, only the method differs).
+- **Skippable:** optional; the core from-scratch learning goal is Track A.
 
 ## 4. Pipeline (Phases) — Track A
 
@@ -55,6 +61,7 @@ _Track B (optional) = phases 2–5 starting from a pretrained base instead of ph
 
 - **Framework: MLX end-to-end** (fastest on M4 Pro, one coherent framework).
 - **Primary focus: Track A** (from scratch); the agent is built on the Track A model. Track B optional.
+- **Track B (PEFT/LoRA):** distinct learning goal = parameter-efficient fine-tuning (LoRA core + QLoRA/DoRA/adapters) via a pluggable `PEFTMethod` interface (adapter pattern); full pipeline (SFT→RL→serve→eval) on a pretrained base (default Qwen3-1.7B, QLoRA unlocks ~27B); PEFT framework shared with Track A for a clean PEFT-vs-full-FT ablation; LoRA mirrors the `mlx_lm` interface. See §3.
 - **Scaling pair:** 50M and 150M both run the **full pipeline** (pretrain → long-ctx → SFT → RL → agent → eval) and are compared at every stage — neither is a throwaway.
 - **Full pipeline:** pretrain → long-context extension → SFT → RL.
 - **RL is included** — R1-style, verifiable math rewards, GRPO (RLOO fallback).
@@ -68,40 +75,70 @@ _Track B (optional) = phases 2–5 starting from a pretrained base instead of ph
 - **Evaluation:** held-out sets (GSM8K test, BFCL unseen, held-out generated tasks, perplexity) run at every stage; scorecard compares pretrain→SFT→RL-A→RL-B for BOTH sizes equally. See §13.
 - **Reasoning-effort control:** a training-time property (model trained to think-first via SFT-CoT + RL-A, both config-toggleable, post-pretraining); exposed at inference as prompt steer (primary) + thinking budget (per-level ceiling, graceful cutoff); best-of-N out of scope (serving feature). See §16.
 - **Serve + Agent:** MLX `generate()` (in-process core) + optional OpenAI-compatible FastAPI server; agent = separable `agent/` harness (robust parsing/repair, error feedback, context mgmt, loop control, tracing, effort integration); single robust loop (no multi-agent/planning/memory/RAG); agent eval = end-to-end task success; HF upload optional capstone. See §14.
+- **Repo structure:** single `src/kestrel/` package (codename **Kestrel**), both tracks unified (track = config + entry-point axis, not a dir boundary); thin `model/io.py` factory; `train/` umbrella + `data/`; configs by model; checkpoint handoff enables incremental build. See §6.
 - **Agent:** custom Python loop (send msgs + tool defs → parse tool call → run function → feed result back → repeat), not an agent framework.
 - **Code authorship:** the agent writes all the code; the human learns by reading the code and watching the runs.
 
-## 6. Code Organization & Modularity (design constraint)
+## 6. Code Organization & Modularity (decided)
 
-The code **must** be modularized, easy to understand, and easy to configure/change. Concretely:
+**Single package, both tracks.** Track A and Track B are **not** separate top-level packages — they share almost all the code (SFT, RL, serve, eval, agent, tools, env, PEFT). The only differences are the **base model** (from-scratch Kestrel vs. a pretrained one) and the **fine-tuning method** (full FT vs. PEFT) — both are config + method-selection concerns, not code boundaries. So the "track" is a **config + entry-point axis**, not a directory boundary.
 
-- **Config-driven:** every tunable (model shape, vocab, lr, batch size, dataset paths, context length, RL hyperparams, agent settings) lives in **YAML configs** loaded into typed dataclasses. Changing a run = editing a YAML, not code.
-- **One module per concern:** tokenizer / corpus / pretrain / sft / rl / serve / agent / eval are separate packages, each independently runnable.
-- **Small composable functions:** model definition is separate from the training loop; dataset is separate from model; reward is separate from the RL loop. Any piece can be swapped.
-- **Track A and Track B are separate packages** so learning code doesn't tangle with optional code.
+**Codename: Kestrel.** The package (and our model) is `src/kestrel/`.
+
+Design constraints:
+- **Config-driven:** every tunable (model shape, vocab, lr, batch, dataset paths, context length, RL/PEFT hyperparams, agent settings) lives in **YAML configs** loaded into typed dataclasses. Changing a run = editing a YAML, not code.
+- **Thin model interface:** our model and a pretrained one are both just MLX `nn.Module`s; `model/io.py` exposes one `load(config)` factory (random-init / from-checkpoint / pretrained) + `save(model, path)`. Every phase/eval/serve gets its model the same way.
+- **`train/` umbrella:** all training loops (`pretrain`, `long_context`, `sft`, `rl`) + one shared `trainer.py` (optimizer, full-FT/PEFT selection, step loop, checkpointing); all dataset prep lives in `data/`.
+- **Checkpoint handoff:** phases are decoupled by checkpoints on disk — each phase loads a checkpoint, runs, saves a checkpoint; the next phase points its config at it. This is what makes **incremental, step-by-step build/test** work.
 - **Entry points** in `scripts/` so each phase is a single command.
 
-Proposed layout (to refine):
+Layout:
 
 ```
 tiny-agent/
-  configs/            # YAML — all tunables
-    track_a/  model_50m.yaml  model_150m.yaml  tokenizer.yaml  corpus.yaml
-               pretrain_50m.yaml  pretrain_150m.yaml  long_context.yaml
-               sft.yaml  rl.yaml  serve.yaml  agent.yaml
-  src/slm/
-    common/           # config loading, logging, utils
-    tokenizer/        # Track A: train BPE
-    corpus/           # Track A: corpus-builder (pluggable components)
-    pretrain/         # Track A: model.py, dataset.py, train.py, long_context.py, evaluate.py
-    sft/              # data.py, train.py
-    rl/               # reward.py, grpo.py, rloo.py, train.py
-    serve/            # OpenAI-compatible server (MLX)
-    agent/            # loop.py, client.py, tools/
-    eval/             # tool_calling.py, math.py
-  scripts/            # run_pretrain.sh, run_longctx.sh, run_sft.sh, run_rl.sh, run_agent.sh
-  data/  checkpoints/
+  configs/                          # by model
+    kestrel/                        # our from-scratch model (Track A) — family of 2 sizes
+      tokenizer.yaml  corpus.yaml   # shared by both sizes
+      50m/    model.yaml  pretrain.yaml  long_context.yaml
+              sft.yaml  rl_a.yaml  rl_b.yaml  serve.yaml  agent.yaml  eval.yaml
+      150m/   model.yaml  pretrain.yaml  long_context.yaml
+              sft.yaml  rl_a.yaml  rl_b.yaml  serve.yaml  agent.yaml  eval.yaml
+              peft_sft.yaml  peft_rl.yaml        # Track B ablation: PEFT on our 150M
+    qwen3_1_7b/                     # pretrained base (Track B)
+      model.yaml  peft_sft.yaml  peft_rl.yaml  serve.yaml  agent.yaml  eval.yaml
+
+  src/kestrel/
+    common/       # config (YAML→dataclass), logging, utils
+    model/        # config.py, kestrel.py (our model), pretrained.py (Qwen3 loader),
+                  # io.py  →  load(config) [random-init / checkpoint / pretrained], save(model, path)
+    tokenizer/    # (Track A) train BPE
+    corpus/       # (Track A) pluggable corpus builder
+    data/         # pretrain_dataset.py, sft_prepare.py, sft_synthetic.py
+    train/        # trainer.py (shared: optimizer, full-FT/PEFT selection, step loop, checkpoint)
+                  # pretrain.py, long_context.py, sft.py,
+                  # rl/ (grpo.py, rloo.py, reward.py, train.py)
+    peft/         # method.py (PEFTMethod iface), lora.py, qlora.py, dora.py, adapter.py, registry.py
+    tools/        # shared tool registry + impls + task-suite generator
+    env/          # agentic environment: execute calls, state, outcome, reward
+    agent/        # loop.py, client.py, parse.py, context.py, trace.py
+    serve/        # generate.py (MLX), server.py (OpenAI-compatible FastAPI)
+    eval/         # run.py, metrics.py, math.py, tool_calling.py, agent_task.py, perplexity.py, datasets/
+
+  scripts/        # Track A: run_tokenizer run_corpus run_pretrain run_longctx run_sft run_rl_a run_rl_b
+                  # Track B: run_peft_sft run_peft_rl
+                  # shared:  run_eval run_serve run_agent
+  data/  checkpoints/  outputs/
 ```
+
+**Incremental build order (each milestone independently runnable + testable):**
+0. `common/` + `model/` + `tokenizer/` — model instantiates; forward pass + tokenizer round-trip.
+1. + `corpus/` + `data/pretrain_dataset.py` + `train/pretrain.py` + `train/trainer.py` → **pretrain** (loss ↓, coherent text).
+2. + minimal `eval/` (perplexity + generate) → validate the base.
+3. + `tools/` + `env/` + `data/sft_*` + `train/sft.py` → **SFT** (follows instructions / tool calls).
+4. + `train/rl/` → **RL** (reward ↑).
+5. + `agent/` + `serve/` → **serve + agent** (end-to-end task success).
+6. + full `eval/` → **scorecard** across all checkpoints.
+7. + `peft/` + `model/pretrained.py` → **Track B (LoRA)** (Qwen3 + 150M ablation).
 
 ## 7. Tokenizer (decided)
 
@@ -335,7 +372,6 @@ Pretrain-only is tracked mainly by **perplexity** (it doesn't know our answer/to
 ## 15. Open Questions (still to decide)
 
 - **150M depth A/B:** 32L (research-aligned) vs ~20L×768 (shallower, safer for 1B tokens) — decide via the loss curve.
-- **Repo / project structure:** finalize the layout in §6.
 
 ## 16. Reasoning / "Reasoning Effort" (decided)
 
@@ -353,5 +389,5 @@ The end result is a **pair of basic small agents** (50M and 150M): simple single
 
 ## 18. Next Steps
 
-- Continue detailed planning discussion (reasoning-effort control, structure) — **no implementation yet**.
-- Once the plan is finalized, break it into Backlog tasks/milestones.
+- Planning is essentially complete — all stage decisions are locked (§6–§16). **No implementation yet.**
+- Next: break the plan into Backlog tasks/milestones (following the §6 incremental build order).
