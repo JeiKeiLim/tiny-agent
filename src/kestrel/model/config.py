@@ -1,15 +1,15 @@
-"""Kestrel model configuration (typed dataclass loaded from YAML)."""
+"""Kestrel model configuration (Pydantic model loaded from YAML)."""
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from kestrel.common.config import BaseConfig
 
 
-@dataclass
-class ModelConfig:
+class ModelConfig(BaseConfig):
     """Shape of a Kestrel decoder-only transformer (plan §9).
 
     Defaults match Kestrel-50M; the 150M shape is supplied via its YAML config.
+    Strict mode rejects mistyped values (e.g. ``n_layers: "15"``).
     """
 
     name: str

@@ -3,7 +3,7 @@ id: doc-001
 title: Agentic SLM Training Pipeline — Project Plan
 type: specification
 created_date: '2026-08-19 22:12'
-updated_date: '2026-08-20 23:25'
+updated_date: '2026-08-21 07:04'
 ---
 # Agentic SLM Training Pipeline — Project Plan
 
@@ -76,6 +76,7 @@ _Track B (optional) = phases 2–5 starting from a pretrained base instead of ph
 - **Reasoning-effort control:** a training-time property (model trained to think-first via SFT-CoT + RL-A, both config-toggleable, post-pretraining); exposed at inference as prompt steer (primary) + thinking budget (per-level ceiling, graceful cutoff); best-of-N out of scope (serving feature). See §16.
 - **Serve + Agent:** MLX `generate()` (in-process core) + optional OpenAI-compatible FastAPI server; agent = separable `agent/` harness (robust parsing/repair, error feedback, context mgmt, loop control, tracing, effort integration); single robust loop (no multi-agent/planning/memory/RAG); agent eval = end-to-end task success; HF upload optional capstone. See §14.
 - **Repo structure:** single `src/kestrel/` package (codename **Kestrel**), both tracks unified (track = config + entry-point axis, not a dir boundary); thin `model/io.py` factory; `train/` umbrella + `data/`; configs by model; checkpoint handoff enables incremental build. See §6.
+- **Code quality:** strict, standard tooling from day one — configs are **strict Pydantic models**; Ruff (lint + format), mypy (strict), pytest + pytest-cov; a `Makefile` runs it all (`make check` = lint + typecheck + test). See README.
 - **Agent:** custom Python loop (send msgs + tool defs → parse tool call → run function → feed result back → repeat), not an agent framework.
 - **Code authorship:** the agent writes all the code; the human learns by reading the code and watching the runs.
 
@@ -86,7 +87,7 @@ _Track B (optional) = phases 2–5 starting from a pretrained base instead of ph
 **Codename: Kestrel.** The package (and our model) is `src/kestrel/`.
 
 Design constraints:
-- **Config-driven:** every tunable (model shape, vocab, lr, batch, dataset paths, context length, RL/PEFT hyperparams, agent settings) lives in **YAML configs** loaded into typed dataclasses. Changing a run = editing a YAML, not code.
+- **Config-driven:** every tunable (model shape, vocab, lr, batch, dataset paths, context length, RL/PEFT hyperparams, agent settings) lives in **YAML configs** loaded into **strict Pydantic models** (mistyped values / unknown keys are rejected). Changing a run = editing a YAML, not code.
 - **Thin model interface:** our model and a pretrained one are both just MLX `nn.Module`s; `model/io.py` exposes one `load(config)` factory (random-init / from-checkpoint / pretrained) + `save(model, path)`. Every phase/eval/serve gets its model the same way.
 - **`train/` umbrella:** all training loops (`pretrain`, `long_context`, `sft`, `rl`) + one shared `trainer.py` (optimizer, full-FT/PEFT selection, step loop, checkpointing); all dataset prep lives in `data/`.
 - **Checkpoint handoff:** phases are decoupled by checkpoints on disk — each phase loads a checkpoint, runs, saves a checkpoint; the next phase points its config at it. This is what makes **incremental, step-by-step build/test** work.
@@ -108,7 +109,7 @@ tiny-agent/
       model.yaml  peft_sft.yaml  peft_rl.yaml  serve.yaml  agent.yaml  eval.yaml
 
   src/kestrel/
-    common/       # config (YAML→dataclass), logging, utils
+    common/       # config (YAML→Pydantic), logging, utils
     model/        # config.py, kestrel.py (our model), pretrained.py (Qwen3 loader),
                   # io.py  →  load(config) [random-init / checkpoint / pretrained], save(model, path)
     tokenizer/    # (Track A) train BPE

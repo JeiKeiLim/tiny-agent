@@ -61,11 +61,33 @@ tiny-agent/
 Requires [uv](https://docs.astral.sh/uv/) and Python 3.13 (pinned in `.python-version`).
 
 ```bash
-uv sync          # create .venv and install dependencies
-uv run pytest    # run the test suite
+make install     # create .venv and install dependencies (runtime + dev)
+make check       # lint + typecheck + test
 ```
 
 > Note: in some environments `uv` needs `--system-certs` for network operations (TLS).
+
+## Code quality
+
+Strict, standard tooling — run it all with `make check`:
+
+- **Config validation** — configs are [Pydantic](https://docs.pydantic.dev/) models in **strict mode** (`extra="forbid"`): a mistyped value (e.g. `n_layers: "15"`) or an unknown key raises a clear `ValidationError`.
+- **Lint + format** — [Ruff](https://docs.astral.sh/ruff/) (`ruff check` + `ruff format`).
+- **Static types** — [mypy](https://mypy.readthedocs.io/) in `strict` mode.
+- **Unit tests** — [pytest](https://docs.pytest.org/) + [pytest-cov](https://pytest-cov.readthedocs.io/). Tests live in `tests/`, mirror the source layout, and test the *code* (not config data values).
+
+Makefile targets:
+
+| Target | Runs |
+|--------|------|
+| `make install` | `uv sync --all-groups` |
+| `make format` | `ruff format` + `ruff check --fix` |
+| `make lint` | `ruff check` |
+| `make typecheck` | `mypy src` (strict) |
+| `make test` | `pytest` |
+| `make coverage` | `pytest --cov` |
+| `make check` | lint + typecheck + test |
+| `make clean` | remove caches/artifacts |
 
 ## Project plan
 
