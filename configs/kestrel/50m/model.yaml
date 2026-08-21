@@ -1,0 +1,12 @@
+# Kestrel-50M model shape (plan §9). Loaded into kestrel.model.config.ModelConfig.
+name: kestrel-50m
+vocab_size: 16384
+context_length: 2048
+n_layers: 15
+n_heads: 8
+n_kv_heads: 2
+hidden_size: 512
+intermediate_size: 1408
+rope_theta: 10000.0
+tie_embeddings: true
+dropout: 0.0
