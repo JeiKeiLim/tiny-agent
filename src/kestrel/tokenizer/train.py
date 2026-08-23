@@ -35,11 +35,14 @@ def train(config: TokenizerConfig) -> Path:
     tokenizer = Tokenizer(BPE(unk_token=None))
     tokenizer.pre_tokenizer = ByteLevel(add_prefix_space=False)
     tokenizer.decoder = ByteLevelDecoder()
+    # Seed the base alphabet with all 256 byte-chars so every byte has a token
+    # regardless of corpus (GPT-2/Qwen convention). Guarantees a lossless
+    # round-trip for any byte sequence, not just observed text.
     trainer = BpeTrainer(  # type: ignore[no-untyped-call]
         vocab_size=config.vocab_size,
         min_frequency=config.min_frequency,
         special_tokens=list(config.special_tokens),
-        initial_alphabet=list(config.initial_alphabet),
+        initial_alphabet=list(ByteLevel.alphabet()),
         show_progress=True,
     )
     tokenizer.train([str(f) for f in files], trainer)

@@ -37,7 +37,6 @@ class TokenizerConfig(BaseConfig):
     output_dir: str = "checkpoints/tokenizer"
     eos_token: str = "im_end"
     min_frequency: int = Field(default=2, gt=0)
-    initial_alphabet: str = '{}[]":,'
     special_tokens: list[str] = Field(default_factory=lambda: list(DEFAULT_SPECIAL_TOKENS))
 
     @model_validator(mode="after")

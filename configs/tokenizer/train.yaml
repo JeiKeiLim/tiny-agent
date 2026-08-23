@@ -10,7 +10,6 @@ train_dir: data/tokenizer_train
 output_dir: checkpoints/tokenizer
 eos_token: im_end
 min_frequency: 2
-initial_alphabet: '{}[]":,'
 special_tokens:
   - im_start
   - im_end
