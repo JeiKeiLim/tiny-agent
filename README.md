@@ -29,9 +29,9 @@ Foundation (Milestone M0) is in progress:
 
 - **Scaffolding** (`TASK-001`) — the `src/kestrel/` package, the generic YAML→Pydantic config loader, `ModelConfig`, sample configs, and the uv environment.
 - **Code quality infra** (`TASK-004`) — strict Pydantic configs, Ruff + mypy (strict) + pytest, and the `make check` gate.
-- **Tokenizer training data** (`TASK-003.01`) — a config-driven script that assembles a representative web / code / JSONL sample for BPE training.
+- **BPE tokenizer** (`TASK-003`) — training-data prep, 16k-vocab byte-level BPE training, round-trip + byte-coverage verification (as tests), and an interactive explorer. Guarantees a lossless round-trip for any byte sequence (all 256 byte-tokens are in the vocab).
 
-Next: train + verify the BPE tokenizer (`TASK-003.02` / `.03`), then the Kestrel model (`TASK-002`). The remaining modules are designed in the project plan and are being built milestone by milestone.
+Next: the Kestrel model (`TASK-002`). The remaining modules are designed in the project plan and are being built milestone by milestone.
 
 ## Repo layout
 
@@ -92,6 +92,12 @@ uv run python -m kestrel.tokenizer.train   # -> checkpoints/tokenizer/tokenizer.
 ```
 
 Vocab size, special tokens, and paths are set in `configs/tokenizer/train.yaml`. The artifact is a runtime output (gitignored) and is regenerated on demand.
+
+The base alphabet is seeded with all 256 byte-tokens (the GPT-2/Qwen convention), so the tokenizer guarantees a **lossless round-trip for any byte sequence** — not just the text observed during training. Round-trip losslessness and raw-byte coverage are verified by `tests/test_tokenizer_verify.py` (part of `make check`); you can also check the trained artifact against any file directly:
+
+```bash
+uv run python tests/test_tokenizer_verify.py FILE [FILE ...] [--coverage]
+```
 
 An interactive explorer renders any text as color-blocked token spans with the token ids on the line below in matching colors (plus `:vocab`, `:specials`, `:id`, `:token`, `:file` commands). `--verbose` adds the full token/id/bytes/kind table:
 
