@@ -5,8 +5,10 @@ classification, byte extraction, and round-trip check, exercised on a tiny
 trained tokenizer.
 """
 
+import sys
 from pathlib import Path
 
+import visualize_tokenizer
 from tokenizers import Tokenizer
 from visualize_tokenizer import KIND_BYTE, KIND_MERGED, KIND_SPECIAL, TokenizerView
 
@@ -53,6 +55,38 @@ def test_view_id_round_trip(tmp_path):
     assert view.view_id(999_999) is None
 
 
+def test_view_offsets_cover_text(tmp_path):
+    view = _tiny_view(tmp_path)
+    text = "im_start hello world"
+    infos = view.view(text)
+    assert "".join(text[i.start : i.end] for i in infos) == text
+
+
 def test_roundtrip_ok(tmp_path):
     view = _tiny_view(tmp_path)
     assert view.roundtrip_ok("hello world def foo(): return 42")
+
+
+def test_readline_cbreak_ignores_erase_char(monkeypatch):
+    import io
+    import os
+    import pty
+    import threading
+    import time
+
+    master, slave = pty.openpty()
+    stdin = io.TextIOWrapper(io.FileIO(slave, "r", closefd=False))
+    monkeypatch.setattr(sys, "stdin", stdin)
+    result: list[str | None] = []
+
+    def run() -> None:
+        result.append(visualize_tokenizer._read_line("tok> "))
+
+    t = threading.Thread(target=run)
+    t.start()
+    time.sleep(0.3)
+    os.write(master, b"abc\x7f\x08d\r")
+    t.join(timeout=5)
+    os.close(master)
+    os.close(slave)
+    assert result == ["ad"]

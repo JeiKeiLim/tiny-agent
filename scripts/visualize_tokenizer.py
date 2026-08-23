@@ -5,13 +5,25 @@ any text to see its tokenization (tokens, ids, byte values, kind), or use
 :commands to inspect the vocab, special tokens, and individual ids.
 
 Usage:
-    uv run python scripts/visualize_tokenizer.py
+    uv run python scripts/visualize_tokenizer.py [--verbose]
+
+Default output is compact: the input as color-blocked token spans with the
+token ids on the line below (same colors). --verbose adds the full
+token/id/bytes/kind table.
+
+Line editing is handled in-process (Backspace and Delete both work regardless
+of the terminal's erase-char setting): Backspace/Delete remove the last char,
+Ctrl-U clears the line, Ctrl-C cancels, Ctrl-D exits.
 """
 
 from __future__ import annotations
 
 import argparse
+import os
+import select
 import sys
+import termios
+import tty
 import unicodedata
 from dataclasses import dataclass
 from pathlib import Path
@@ -35,6 +47,26 @@ _GRAY = "\033[90m"
 
 _KIND_COLOR = {KIND_SPECIAL: _BOLD + _MAGENTA, KIND_MERGED: _GREEN, KIND_BYTE: _GRAY}
 
+# (background, foreground) pairs, cycled per token so adjacent spans contrast.
+# No black background: it is invisible on dark terminals.
+_PALETTE = [
+    ("\033[41m", "\033[97m"),
+    ("\033[42m", "\033[30m"),
+    ("\033[43m", "\033[30m"),
+    ("\033[44m", "\033[97m"),
+    ("\033[45m", "\033[97m"),
+    ("\033[46m", "\033[30m"),
+    ("\033[47m", "\033[30m"),
+    ("\033[100m", "\033[97m"),
+    ("\033[101m", "\033[97m"),
+    ("\033[102m", "\033[30m"),
+    ("\033[103m", "\033[30m"),
+    ("\033[104m", "\033[97m"),
+    ("\033[105m", "\033[97m"),
+    ("\033[106m", "\033[30m"),
+    ("\033[107m", "\033[30m"),
+]
+
 _COLOR = True
 
 _HELP = """commands:
@@ -55,6 +87,8 @@ class TokenInfo:
     token_id: int
     kind: str
     byte_values: tuple[int, ...]
+    start: int = 0
+    end: int = 0
 
 
 def build_byte_map(tokenizer: Tokenizer) -> dict[str, int]:
@@ -76,7 +110,7 @@ class TokenizerView:
         )
         self._byte_map = build_byte_map(tokenizer)
 
-    def _info(self, token: str, token_id: int) -> TokenInfo:
+    def _info(self, token: str, token_id: int, start: int = 0, end: int = 0) -> TokenInfo:
         if token in self.specials:
             kind = KIND_SPECIAL
         elif len(token) > 1:
@@ -84,17 +118,20 @@ class TokenizerView:
         else:
             kind = KIND_BYTE
         byte_values = tuple(self._byte_map.get(ch, ord(ch)) for ch in token)
-        return TokenInfo(token, token_id, kind, byte_values)
+        return TokenInfo(token, token_id, kind, byte_values, start, end)
 
     def view(self, text: str) -> list[TokenInfo]:
         enc = self.tokenizer.encode(text)
-        return [self._info(t, i) for t, i in zip(enc.tokens, enc.ids, strict=True)]
+        return [
+            self._info(t, i, s, e)
+            for t, i, (s, e) in zip(enc.tokens, enc.ids, enc.offsets, strict=True)
+        ]
 
     def view_id(self, token_id: int) -> TokenInfo | None:
         token = self.tokenizer.id_to_token(token_id)
         if token is None:
             return None
-        return self._info(token, token_id)
+        return self._info(token, token_id, 0, len(token))
 
     def roundtrip_ok(self, text: str) -> bool:
         return self.tokenizer.decode(self.tokenizer.encode(text).ids) == text
@@ -153,13 +190,38 @@ def _row(info: TokenInfo) -> list[str]:
     ]
 
 
-def render_view(text: str, infos: list[TokenInfo], ok: bool) -> str:
-    rows = [_row(i) for i in infos]
-    colors = [[_KIND_COLOR[i.kind], _CYAN, _GRAY, _KIND_COLOR[i.kind]] for i in infos]
+def _span_color(i: int) -> str:
+    bg, fg = _PALETTE[i % len(_PALETTE)]
+    return bg + fg
+
+
+def render_spans(text: str, infos: list[TokenInfo]) -> str:
+    parts = []
+    for i, info in enumerate(infos):
+        parts.append(_paint(_span_color(i), text[info.start : info.end]))
+    return "".join(parts)
+
+
+def render_ids(text: str, infos: list[TokenInfo]) -> str:
+    parts = []
+    for i, info in enumerate(infos):
+        width = _disp_width(text[info.start : info.end])
+        parts.append(_paint(_span_color(i), _pad(str(info.token_id), width)))
+    return "".join(parts)
+
+
+def render_view(text: str, infos: list[TokenInfo], ok: bool, verbose: bool = False) -> str:
     status = _paint(_GREEN, "round-trip: OK") if ok else _paint(_RED, "round-trip: FAIL")
     unit = "token" if len(infos) == 1 else "tokens"
     header = f"{_paint(_BOLD, repr(_short(text)))} → {len(infos)} {unit} | {status}"
-    return header + "\n" + _table(["token", "id", "bytes", "kind"], rows, colors)
+    out = header + "\n" + render_spans(text, infos) + "\n" + render_ids(text, infos)
+    if verbose:
+        rows = [_row(i) for i in infos]
+        colors = [
+            [_span_color(i), _CYAN, _GRAY, _KIND_COLOR[info.kind]] for i, info in enumerate(infos)
+        ]
+        out += "\n" + _table(["token", "id", "bytes", "kind"], rows, colors)
+    return out
 
 
 def _read_prefix(path: Path, n: int) -> str:
@@ -167,7 +229,104 @@ def _read_prefix(path: Path, n: int) -> str:
         return f.read(n).decode("utf-8", errors="replace")
 
 
-def _command(line: str, view: TokenizerView) -> bool:
+def _read_byte(fd: int, timeout: float | None = None) -> bytes:
+    if timeout is None:
+        return os.read(fd, 1)
+    ready, _, _ = select.select([fd], [], [], timeout)
+    return os.read(fd, 1) if ready else b""
+
+
+def _read_escape_seq(fd: int) -> str:
+    """Read a full key sequence after an ESC; return it (e.g. '3~' for Delete)."""
+    first = _read_byte(fd, 0.05)
+    if first not in (b"[", b"O"):
+        return ""
+    seq = first.decode("ascii")
+    while True:
+        b = _read_byte(fd, 0.05)
+        if not b:
+            break
+        seq += chr(b[0])
+        if 0x40 <= b[0] <= 0x7E:
+            break
+    return seq
+
+
+def _erase_last(chars: list[str]) -> None:
+    if not chars:
+        return
+    ch = chars.pop()
+    w = _disp_width(ch)
+    sys.stdout.write("\b" * w + " " * w + "\b" * w)
+    sys.stdout.flush()
+
+
+def _readline_cbreak(prompt: str) -> str | None:
+    """Read one line with manual editing, immune to the terminal's erase char.
+
+    A mismatched terminal erase char makes the driver echo ^? and let stray
+    DEL bytes into the line, so editing is done here instead: both 0x7F
+    (Delete) and 0x08 (Backspace) remove the last character. Ctrl-U clears
+    the line, Ctrl-C cancels, Ctrl-D exits. Returns None on Ctrl-D/EOF.
+    """
+    fd = sys.stdin.fileno()
+    old = termios.tcgetattr(fd)
+    chars: list[str] = []
+    try:
+        tty.setcbreak(fd)
+        sys.stdout.write(prompt)
+        sys.stdout.flush()
+        while True:
+            b = os.read(fd, 1)
+            if not b:
+                return None
+            c = b[0]
+            if c in (0x0D, 0x0A):
+                break
+            if c == 0x03:
+                raise KeyboardInterrupt
+            if c == 0x04:
+                return None
+            if c in (0x7F, 0x08):
+                _erase_last(chars)
+            elif c == 0x15:
+                if chars:
+                    w = sum(_disp_width(ch) for ch in chars)
+                    sys.stdout.write("\b" * w + " " * w + "\b" * w)
+                    chars.clear()
+                    sys.stdout.flush()
+            elif c == 0x1B:
+                if _read_escape_seq(fd) == "[3~":
+                    _erase_last(chars)
+            elif c < 0x20:
+                continue
+            elif c < 0x80:
+                chars.append(chr(c))
+                sys.stdout.write(chr(c))
+                sys.stdout.flush()
+            else:
+                n = 2 if c < 0xE0 else 3
+                raw = bytes([c]) + b"".join(os.read(fd, 1) for _ in range(n))
+                ch = raw.decode("utf-8", "replace")
+                chars.append(ch)
+                sys.stdout.write(ch)
+                sys.stdout.flush()
+        sys.stdout.write("\n")
+        return "".join(chars)
+    finally:
+        termios.tcsetattr(fd, termios.TCSADRAIN, old)
+
+
+def _read_line(prompt: str) -> str | None:
+    if sys.stdin.isatty():
+        return _readline_cbreak(prompt)
+    try:
+        return input(prompt)
+    except EOFError:
+        return None
+
+
+def _command(line: str, view: TokenizerView, verbose: bool) -> bool:
     parts = line.split()
     cmd = parts[0]
     if cmd in (":q", ":quit"):
@@ -190,18 +349,18 @@ def _command(line: str, view: TokenizerView) -> bool:
         if info is None:
             print("no token for that id")
         else:
-            print(render_view(f"id {info.token_id}", [info], True))
+            print(render_view(info.token, [info], True, verbose))
     elif cmd == ":token":
         token = parts[1]
         info = view.view_id(view.tokenizer.token_to_id(token) or -1)
         if info is None:
             print(f"{token!r} is not in the vocab")
         else:
-            print(render_view(token, [info], True))
+            print(render_view(token, [info], True, verbose))
     elif cmd == ":file":
         n = int(parts[2]) if len(parts) > 2 else 200
         text = _read_prefix(Path(parts[1]), n)
-        print(render_view(text, view.view(text), view.roundtrip_ok(text)))
+        print(render_view(text, view.view(text), view.roundtrip_ok(text), verbose))
     else:
         print(f"unknown command {cmd!r} (:help for the list)")
     return False
@@ -211,6 +370,7 @@ def main() -> None:
     global _COLOR
     parser = argparse.ArgumentParser(description="Interactively explore the trained tokenizer.")
     parser.add_argument("--config", default="configs/tokenizer/train.yaml")
+    parser.add_argument("--verbose", action="store_true", help="also print the full token table")
     args = parser.parse_args()
     config = load_config(args.config, TokenizerConfig)
     artifact = Path(config.output_dir) / "tokenizer.json"
@@ -227,21 +387,24 @@ def main() -> None:
     print("type text to tokenize, :help for commands, :quit to exit")
     while True:
         try:
-            line = input("tok> ").strip()
-        except (EOFError, KeyboardInterrupt):
+            line = _read_line("tok> ")
+        except KeyboardInterrupt:
             print()
             return
+        if line is None:
+            return
+        line = line.strip().replace("\x7f", "")
         if not line:
             continue
         if line.startswith(":"):
             try:
-                if _command(line, view):
+                if _command(line, view, args.verbose):
                     return
             except (ValueError, IndexError, OSError) as e:
                 print(f"error in {line!r}: {e}")
             continue
         infos = view.view(line)
-        print(render_view(line, infos, view.roundtrip_ok(line)))
+        print(render_view(line, infos, view.roundtrip_ok(line), args.verbose))
 
 
 if __name__ == "__main__":
