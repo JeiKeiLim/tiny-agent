@@ -1,20 +1,21 @@
 ---
 id: TASK-003
-title: BPE tokenizer (16k vocab) + round-trip
+title: BPE tokenizer (16k vocab)
 status: To Do
 assignee: []
 created_date: '2026-08-21 06:44'
+updated_date: '2026-08-21 07:15'
 labels: []
 milestone: m-0
 dependencies:
   - TASK-001
-ordinal: 3000
+ordinal: 2000
 ---
 
 ## Description
 
 <!-- SECTION:DESCRIPTION:BEGIN -->
-Train a byte-level BPE tokenizer per §7 using HuggingFace tokenizers: 16k vocab (configurable), shared by both model sizes. Provide a train script + the saved tokenizer artifact.
+A working byte-level BPE tokenizer (16k vocab, configurable) shared by both model sizes, trained on a representative sample of the target domain. Steps (sub-tasks): prepare training data -> train -> verify.
 <!-- SECTION:DESCRIPTION:END -->
 
 ## Acceptance Criteria

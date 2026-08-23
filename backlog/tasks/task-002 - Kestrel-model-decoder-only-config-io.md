@@ -4,11 +4,12 @@ title: Kestrel model (decoder-only) + config + io
 status: To Do
 assignee: []
 created_date: '2026-08-21 06:44'
+updated_date: '2026-08-21 07:12'
 labels: []
 milestone: m-0
 dependencies:
   - TASK-001
-ordinal: 2000
+ordinal: 3000
 ---
 
 ## Description

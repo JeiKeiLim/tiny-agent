@@ -1,0 +1,19 @@
+# Tokenizer training-data sample (plan §7). Loaded into
+# kestrel.data.tokenizer_data_config.TokenizerTrainDataConfig.
+#
+# A representative text sample (web + code + JSONL) to train the 16k-vocab BPE
+# tokenizer. Same domain as the pretrain corpus (milestone 1), smaller sample.
+total_bytes: 1073741824  # ~1 GB (tunable up to ~2 GB)
+output_dir: data/tokenizer_train
+sources:
+  web:
+    dataset: HuggingFaceFW/fineweb-edu
+    text_field: text
+    fraction: 0.85
+  code:
+    dataset: theothertom/codeparrot-python-only
+    text_field: code
+    fraction: 0.10
+  jsonl:
+    dataset: tatsu-lab/alpaca
+    fraction: 0.05  # text_field omitted -> each row serialized to a JSONL line

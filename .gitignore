@@ -16,10 +16,11 @@ dist/
 .coverage
 htmlcov/
 
-# Runtime artifacts (datasets, checkpoints, outputs)
-data/
-checkpoints/
-outputs/
+# Runtime artifacts (datasets, checkpoints, outputs) — root-level only,
+# so this does not shadow the src/kestrel/data/ code module.
+/data/
+/checkpoints/
+/outputs/
 *.mlx
 *.safetensors
 

@@ -25,7 +25,13 @@ Kestrel trains a **pair of small decoder-only models (50M and 150M)** from scrat
 
 ## Status
 
-Scaffolding is complete (Backlog `TASK-001`): the `src/kestrel/` package, the generic YAML→dataclass config loader, `ModelConfig`, sample configs, and the uv environment. The remaining modules are designed in the project plan and are being built milestone by milestone.
+Foundation (Milestone M0) is in progress:
+
+- **Scaffolding** (`TASK-001`) — the `src/kestrel/` package, the generic YAML→Pydantic config loader, `ModelConfig`, sample configs, and the uv environment.
+- **Code quality infra** (`TASK-004`) — strict Pydantic configs, Ruff + mypy (strict) + pytest, and the `make check` gate.
+- **Tokenizer training data** (`TASK-003.01`) — a config-driven script that assembles a representative web / code / JSONL sample for BPE training.
+
+Next: train + verify the BPE tokenizer (`TASK-003.02` / `.03`), then the Kestrel model (`TASK-002`). The remaining modules are designed in the project plan and are being built milestone by milestone.
 
 ## Repo layout
 
@@ -39,11 +45,11 @@ tiny-agent/
       150m/           model.yaml  ...  peft_sft.yaml  peft_rl.yaml
     qwen3_1_7b/       # pretrained base (Track B)
   src/kestrel/
-    common/           # config (YAML→dataclass), logging, utils
+    common/           # config (YAML→Pydantic), logging, utils
     model/            # config.py, kestrel.py, pretrained.py, io.py (load/save)
     tokenizer/        # (Track A) train BPE
     corpus/           # (Track A) pluggable corpus builder
-    data/             # dataset prep (pretrain, sft)
+    data/             # dataset prep (tokenizer sample, pretrain, sft)
     train/            # trainer.py + pretrain.py, long_context.py, sft.py, rl/
     peft/             # PEFTMethod iface + lora/qlora/dora/adapter + registry
     tools/            # shared tool registry + impls + task-suite generator
@@ -66,6 +72,16 @@ make check       # lint + typecheck + test
 ```
 
 > Note: in some environments `uv` needs `--system-certs` for network operations (TLS).
+
+### Tokenizer training data
+
+The BPE tokenizer trains on a representative sample (web + code + JSONL) assembled by a config-driven script:
+
+```bash
+.venv/bin/python -m kestrel.data.prepare_tokenizer_data   # -> data/tokenizer_train/
+```
+
+Sources and total size are set in `configs/tokenizer/train_data.yaml` (default ~1 GB, tunable). The sample is a runtime artifact (gitignored) and is regenerated on demand; re-runs are fast because `datasets` caches the HuggingFace shards. In environments with a custom/corporate CA, the script uses `truststore` so the download works without manual cert setup.
 
 ## Code quality
 
