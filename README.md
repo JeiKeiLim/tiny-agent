@@ -93,10 +93,10 @@ uv run python -m kestrel.tokenizer.train   # -> checkpoints/tokenizer/tokenizer.
 
 Vocab size, special tokens, and paths are set in `configs/tokenizer/train.yaml`. The artifact is a runtime output (gitignored) and is regenerated on demand.
 
-An interactive explorer shows the tokens, ids, and byte values for any text (plus `:vocab`, `:specials`, `:id`, `:token`, `:file` commands):
+An interactive explorer renders any text as color-blocked token spans with the token ids on the line below in matching colors (plus `:vocab`, `:specials`, `:id`, `:token`, `:file` commands). `--verbose` adds the full token/id/bytes/kind table:
 
 ```bash
-uv run python scripts/visualize_tokenizer.py
+uv run python scripts/visualize_tokenizer.py [--verbose]
 ```
 
 ## Code quality
