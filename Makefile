@@ -16,8 +16,9 @@ format: ## Auto-format and fix lint issues
 	$(UV) run ruff format src tests
 	$(UV) run ruff check --fix src tests
 
-lint: ## Lint (ruff)
+lint: ## Lint (ruff check + format check)
 	$(UV) run ruff check src tests
+	$(UV) run ruff format --check src tests
 
 typecheck: ## Static type check (mypy, strict)
 	$(UV) run mypy src
@@ -28,7 +29,7 @@ test: ## Run unit tests
 coverage: ## Run unit tests with coverage
 	$(UV) run pytest --cov=kestrel --cov-report=term-missing
 
-check: lint typecheck test ## Run all checks (lint + typecheck + test)
+check: lint typecheck test ## Run all checks (lint + format + typecheck + test)
 
 clean: ## Remove caches and build artifacts
 	rm -rf .pytest_cache .mypy_cache .ruff_cache .coverage htmlcov dist build

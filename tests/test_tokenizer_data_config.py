@@ -61,12 +61,7 @@ def test_fractions_must_sum_to_one(tmp_path):
 def test_rejects_unknown_key(tmp_path):
     p = _write(
         tmp_path,
-        "total_bytes: 1000\n"
-        "sources:\n"
-        "  web:\n"
-        "    dataset: some/ds\n"
-        "    fraction: 1.0\n"
-        "bogus: 1\n",
+        "total_bytes: 1000\nsources:\n  web:\n    dataset: some/ds\n    fraction: 1.0\nbogus: 1\n",
     )
     with pytest.raises(ValidationError):
         load_config(p, TokenizerTrainDataConfig)
@@ -75,11 +70,7 @@ def test_rejects_unknown_key(tmp_path):
 def test_rejects_mistyped_scalar(tmp_path):
     p = _write(
         tmp_path,
-        'total_bytes: "1000"\n'
-        "sources:\n"
-        "  web:\n"
-        "    dataset: some/ds\n"
-        "    fraction: 1.0\n",
+        'total_bytes: "1000"\nsources:\n  web:\n    dataset: some/ds\n    fraction: 1.0\n',
     )
     with pytest.raises(ValidationError):
         load_config(p, TokenizerTrainDataConfig)

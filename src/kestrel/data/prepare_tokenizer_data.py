@@ -38,16 +38,14 @@ def _extract_text(row: dict[str, object], text_field: str | None) -> str | None:
         return None
 
 
-def _stream_source(
-    name: str, source: SourceConfig, target_bytes: int, out_path: Path
-) -> int:
+def _stream_source(name: str, source: SourceConfig, target_bytes: int, out_path: Path) -> int:
     """Stream ``source`` up to ``target_bytes`` into ``out_path``.
 
     Returns the number of bytes written (may be less than the target if the
     source is exhausted first).
     """
     ds = load_dataset(source.dataset, name=source.config, streaming=True)
-    split = list(ds.keys())[0]
+    split = next(iter(ds.keys()))
     written = 0
     next_log_mb = 50
     with out_path.open("w", encoding="utf-8") as f:

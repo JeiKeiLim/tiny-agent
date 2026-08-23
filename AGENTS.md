@@ -9,7 +9,7 @@ Kestrel is a small-scale, modern **agentic LLM training pipeline** on [MLX](http
 
 ## Commands (Makefile)
 - `make install` — create `.venv` + install deps (runtime + dev).
-- `make check` — **lint + typecheck + test** (the gate for any code change).
+- `make check` — **lint (ruff check + format) + typecheck + test** (the gate for any code change).
 - `make format` / `make lint` / `make typecheck` / `make test` / `make coverage` — individual steps.
 - `make help` — list all targets.
 
