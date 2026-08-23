@@ -13,15 +13,15 @@ install: ## Install all dependencies (runtime + dev)
 sync: install
 
 format: ## Auto-format and fix lint issues
-	$(UV) run ruff format src tests
-	$(UV) run ruff check --fix src tests
+	$(UV) run ruff format src tests scripts
+	$(UV) run ruff check --fix src tests scripts
 
 lint: ## Lint (ruff check + format check)
-	$(UV) run ruff check src tests
-	$(UV) run ruff format --check src tests
+	$(UV) run ruff check src tests scripts
+	$(UV) run ruff format --check src tests scripts
 
 typecheck: ## Static type check (mypy, strict)
-	$(UV) run mypy src
+	$(UV) run mypy src scripts
 
 test: ## Run unit tests
 	$(UV) run pytest

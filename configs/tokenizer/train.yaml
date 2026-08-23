@@ -1,0 +1,23 @@
+# BPE tokenizer training (plan §7). Loaded into
+# kestrel.tokenizer.config.TokenizerConfig.
+#
+# Byte-level BPE, 16k vocab (configurable), shared by the 50M and 150M models.
+# Trains on the prepared sample from kestrel.data.prepare_tokenizer_data.
+# Special tokens are baked in at training time (ChatML + tool-call set, matching
+# Qwen2.5 / Mistral conventions); im_end doubles as the EOS/stop token.
+vocab_size: 16384
+train_dir: data/tokenizer_train
+output_dir: checkpoints/tokenizer
+eos_token: im_end
+min_frequency: 2
+initial_alphabet: '{}[]":,'
+special_tokens:
+  - im_start
+  - im_end
+  - im_system
+  - im_user
+  - im_assistant
+  - tool_call
+  - tool_call_end
+  - tool_response
+  - tool_response_end

@@ -78,10 +78,26 @@ make check       # lint + typecheck + test
 The BPE tokenizer trains on a representative sample (web + code + JSONL) assembled by a config-driven script:
 
 ```bash
-.venv/bin/python -m kestrel.data.prepare_tokenizer_data   # -> data/tokenizer_train/
+uv run python -m kestrel.data.prepare_tokenizer_data   # -> data/tokenizer_train/
 ```
 
 Sources and total size are set in `configs/tokenizer/train_data.yaml` (default ~1 GB, tunable). The sample is a runtime artifact (gitignored) and is regenerated on demand; re-runs are fast because `datasets` caches the HuggingFace shards. In environments with a custom/corporate CA, the script uses `truststore` so the download works without manual cert setup.
+
+### Tokenizer training
+
+The byte-level BPE tokenizer (16k vocab, configurable) is trained on that sample with HuggingFace `tokenizers`. ChatML + tool-call special tokens are baked in at training time; the artifact is shared by both model sizes:
+
+```bash
+uv run python -m kestrel.tokenizer.train   # -> checkpoints/tokenizer/tokenizer.json
+```
+
+Vocab size, special tokens, and paths are set in `configs/tokenizer/train.yaml`. The artifact is a runtime output (gitignored) and is regenerated on demand.
+
+An interactive explorer shows the tokens, ids, and byte values for any text (plus `:vocab`, `:specials`, `:id`, `:token`, `:file` commands):
+
+```bash
+uv run python scripts/visualize_tokenizer.py
+```
 
 ## Code quality
 
