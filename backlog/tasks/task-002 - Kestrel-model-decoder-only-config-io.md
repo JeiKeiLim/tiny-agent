@@ -1,10 +1,10 @@
 ---
 id: TASK-002
 title: Kestrel model (decoder-only) + config + io
-status: To Do
+status: Done
 assignee: []
 created_date: '2026-08-21 06:44'
-updated_date: '2026-08-24 00:27'
+updated_date: '2026-08-24 01:31'
 labels: []
 milestone: m-0
 dependencies:
@@ -25,7 +25,13 @@ Scope notes (decided 2026-08-24):
 
 ## Acceptance Criteria
 <!-- AC:BEGIN -->
-- [ ] #1 Instantiate Kestrel-50M and -150M from config; param counts land near ~50M / ~150M
-- [ ] #2 Forward pass on random token IDs returns logits of shape (B, T, vocab) with finite loss
-- [ ] #3 model/io.py load(config) + save(model, path) round-trips a checkpoint
+- [x] #1 Instantiate Kestrel-50M and -150M from config; param counts land near ~50M / ~150M
+- [x] #2 Forward pass on random token IDs returns logits of shape (B, T, vocab) with finite loss
+- [x] #3 model/io.py load(config) + save(model, path) round-trips a checkpoint
 <!-- AC:END -->
+
+## Final Summary
+
+<!-- SECTION:FINAL_SUMMARY:BEGIN -->
+All 3 subtasks done: TASK-002.01 (model/kestrel.py decoder-only transformer + count_params), TASK-002.02 (model/io.py load(config, checkpoint) + save(model, path)), TASK-002.03 (scripts/check_model.py smoke-test CLI). 50M = 50,675,200 params; forward pass yields finite loss; io round-trips a checkpoint. make check green.
+<!-- SECTION:FINAL_SUMMARY:END -->
