@@ -1,0 +1,25 @@
+# Pretraining corpus (plan §8). Loaded into kestrel.corpus.config.CorpusConfig.
+#
+# M1 validation: reuse the existing 1GB tokenizer sample via 'local' sources
+# (no new download). The full ~1B run (later) swaps these for 'hf' sources.
+# total_bytes is the raw-text budget; the dataset step's total_tokens is the
+# authoritative training cap.
+total_bytes: 1073741824  # ~1 GB
+seed: 0
+output_dir: data/corpus
+components:
+  - name: web
+    fraction: 0.85
+    source:
+      type: local
+      path: data/tokenizer_train/web.txt
+  - name: code
+    fraction: 0.10
+    source:
+      type: local
+      path: data/tokenizer_train/code.txt
+  - name: jsonl
+    fraction: 0.05
+    source:
+      type: local
+      path: data/tokenizer_train/jsonl.txt
