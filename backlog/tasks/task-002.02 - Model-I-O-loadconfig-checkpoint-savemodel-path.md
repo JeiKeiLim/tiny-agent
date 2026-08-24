@@ -1,10 +1,11 @@
 ---
 id: TASK-002.02
 title: 'Model I/O: load(config, checkpoint) + save(model, path)'
-status: To Do
-assignee: []
+status: Done
+assignee:
+  - '@limjk'
 created_date: '2026-08-24 00:15'
-updated_date: '2026-08-24 00:17'
+updated_date: '2026-08-24 01:03'
 labels: []
 milestone: m-0
 dependencies:
@@ -21,9 +22,9 @@ Implement src/kestrel/model/io.py: load(config, checkpoint=None) factory for Kes
 
 ## Acceptance Criteria
 <!-- AC:BEGIN -->
-- [ ] #1 load(config) returns a randomly-initialized Kestrel model
-- [ ] #2 save(model, path) + load(config, path) round-trips a checkpoint (weights identical after reload)
-- [ ] #3 Checkpoints are written to the checkpoints/<phase>/<name>/ directory convention
+- [x] #1 load(config) returns a randomly-initialized Kestrel model
+- [x] #2 save(model, path) + load(config, path) round-trips a checkpoint (weights identical after reload)
+- [x] #3 Checkpoints are written to the checkpoints/<phase>/<name>/ directory convention
 <!-- AC:END -->
 
 ## Implementation Plan
@@ -49,4 +50,12 @@ Decisions/gotchas:
 - Round-trip check: compare each param array with mx.array_equal, or compare a fixed-input forward pass before/after reload.
 - Checkpoint path example: checkpoints/pretrain/kestrel-50m/ (phase=pretrain, name=kestrel-50m). The <phase> and <name> come from the calling phase config, not hardcoded in io.py.
 - reference: plan doc-001 §6 (thin model interface, checkpoint handoff).
+
+MLX 0.32.1 gotcha: mx.save_weights / mx.load_weights do NOT exist in mlx.core (verified via dir(mx)/hasattr). Available: mx.savez(file, **arrays), mx.load(file), mx.save_safetensors(file, dict), and the nn.Module.save_weights(file)/load_weights(file_or_weights) methods. Solution: use model.save_weights(dir/"weights.npz") + model.load_weights(dir/"weights.npz") (nn.Module methods wrap mx.savez/mx.load, flatten/unflatten params, strict=True validates exact match). Still yields the checkpoints/<phase>/<name>/weights.npz dir convention. Tied embedding: only embed.weight is saved (no lm_head), so round-trip is clean. mypy: model.save_weights/load_weights type-check fine (Kestrel base is Any via mlx.nn follow_imports=skip).
 <!-- SECTION:NOTES:END -->
+
+## Final Summary
+
+<!-- SECTION:FINAL_SUMMARY:BEGIN -->
+Implemented src/kestrel/model/io.py: save(model, path) creates the checkpoints/<phase>/<name>/ dir and writes weights.npz; load(config, checkpoint=None) builds Kestrel(config) and, when checkpoint is given, strictly loads weights.npz (else random-init). Kestrel-only factory (no pretrained/Qwen3 branch). Tests in tests/test_model_io.py (3): random-init finite weights, checkpoint dir convention, save/load round-trip with per-param mx.array_equal. Verified on real 50M config: 202.7 MB weights.npz, reload matches. make check green (mypy 24 files, 40 tests).
+<!-- SECTION:FINAL_SUMMARY:END -->
