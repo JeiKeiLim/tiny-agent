@@ -1,0 +1,54 @@
+---
+id: TASK-005.05
+title: >-
+  Pretrain loop + entry point (train/pretrain.py, run_pretrain.py,
+  50m/pretrain.yaml)
+status: To Do
+assignee: []
+created_date: '2026-08-24 01:56'
+labels: []
+milestone: m-1
+dependencies:
+  - TASK-005.01
+  - TASK-005.02
+  - TASK-005.03
+references:
+  - backlog/docs/doc-001 - Agentic-SLM-Training-Pipeline-—-Project-Plan.md
+parent_task_id: TASK-005
+ordinal: 14000
+---
+
+## Description
+
+<!-- SECTION:DESCRIPTION:BEGIN -->
+Wire corpus -> dataset -> trainer into a runnable pretrain phase with a CLI entry point and a 50M config. This is the integration point that makes pretrain a single command (build-order step 1 of doc-001 §6).
+
+Files to create:
+- src/kestrel/train/pretrain.py  (PretrainConfig + pretrain(config))
+- scripts/run_pretrain.py  (CLI, mirrors scripts/check_model.py)
+- configs/kestrel/50m/pretrain.yaml
+- tests/test_pretrain.py
+
+Design:
+- PretrainConfig (Pydantic, strict): model config path (50m/model.yaml), tokenizer path (checkpoints/tokenizer/tokenizer.json), corpus config (corpus.yaml), total_tokens (validation target ~50M), and trainer settings (embed a TrainerConfig).
+- pretrain(config): load model via kestrel.model.io.load -> corpus.builder.build -> PretrainDataset -> train.trainer -> save final checkpoint.
+- scripts/run_pretrain.py: argparse --config, load PretrainConfig, call pretrain().
+
+configs/kestrel/50m/pretrain.yaml fields:
+- model: configs/kestrel/50m/model.yaml
+- tokenizer: checkpoints/tokenizer/tokenizer.json
+- corpus: configs/kestrel/corpus.yaml
+- total_tokens: ~50_000_000  (validation target)
+- trainer: { lr, weight_decay, batch_size, seq_len: 2048, num_steps, warmup_steps, grad_clip, save_every, log_every, output_dir: checkpoints/pretrain/50m/ }
+
+Quantitative targets:
+- a TINY end-to-end pretrain (tiny model + tiny local corpus + few steps) runs, loss decreases, checkpoint written.
+<!-- SECTION:DESCRIPTION:END -->
+
+## Acceptance Criteria
+<!-- AC:BEGIN -->
+- [ ] #1 pretrain(config) runs end-to-end on a TINY config (tiny model + tiny local corpus + few steps): loss finite and decreasing, checkpoint written to output_dir
+- [ ] #2 scripts/run_pretrain.py --config <path> runs the same path via CLI (argparse, mirrors check_model.py)
+- [ ] #3 configs/kestrel/50m/pretrain.yaml loads into PretrainConfig (strict) with seq_len 2048 and total_tokens ~50M
+- [ ] #4 tests/test_pretrain.py uses a TINY config (tiny model + tiny local corpus + few steps) so it runs fast; make check green
+<!-- AC:END -->
