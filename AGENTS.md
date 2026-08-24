@@ -21,6 +21,21 @@ Conventions:
 - Tests live in `tests/`, mirror the source layout, and test the **code** (not config data values).
 - Keep code modular and config-driven (one module per concern; see plan doc §6).
 
+## Backlog task authoring — MANDATORY
+
+**Every task must be standalone: a fresh agent with no prior conversation context should be able to open the task and start working immediately.** After compaction or in a new session only the task document (not the chat) is available, so it must carry everything needed to do the work.
+
+When creating or splitting a task, its description + plan + notes must include:
+- **Concrete file paths** to create/modify (e.g. `src/kestrel/model/kestrel.py`, not just "the model").
+- **Config locations + field names** when config-driven (where the YAML is, what the fields are).
+- **Quantitative targets with a tolerance** so an AC can be asserted, not hand-waved (e.g. "param count within ~5% of 50M / 150M").
+- **Test file names** and what each test asserts.
+- **Design decisions + gotchas** (framework pitfalls, non-obvious choices + rationale) so they are not re-litigated or re-discovered.
+- **The verification gate** (`make check`) and how to verify the result.
+- **References** to the plan doc (`backlog/docs/doc-001 §N`) for the "why".
+
+Before marking a task ready, audit it for standalone-ness: if a cold reader would have to guess at anything, add the missing detail.
+
 ## References
 - `README.md` — overview, repo layout, code-quality strategy.
 - `backlog/docs/doc-001 …` — the full project plan (architecture, corpus, SFT/RL, serve + agent, eval, reasoning-effort).
