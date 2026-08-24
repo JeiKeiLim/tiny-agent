@@ -1,10 +1,11 @@
 ---
 id: TASK-002.01
 title: Kestrel model architecture (decoder-only transformer)
-status: To Do
-assignee: []
+status: Done
+assignee:
+  - '@limjk'
 created_date: '2026-08-24 00:15'
-updated_date: '2026-08-24 00:17'
+updated_date: '2026-08-24 00:45'
 labels: []
 milestone: m-0
 dependencies: []
@@ -20,9 +21,9 @@ Implement the Kestrel decoder-only transformer in src/kestrel/model/kestrel.py p
 
 ## Acceptance Criteria
 <!-- AC:BEGIN -->
-- [ ] #1 Instantiate Kestrel-50M and Kestrel-150M from their configs; count_params lands near ~50M / ~150M (asserted, not hand-waved)
-- [ ] #2 Forward pass on random token IDs returns logits of shape (B, T, vocab) with finite cross-entropy loss
-- [ ] #3 GQA exercised (n_kv_heads=2 < n_heads) via fused attention; no biases anywhere; dropout 0
+- [x] #1 Instantiate Kestrel-50M and Kestrel-150M from their configs; count_params lands near ~50M / ~150M (asserted, not hand-waved)
+- [x] #2 Forward pass on random token IDs returns logits of shape (B, T, vocab) with finite cross-entropy loss
+- [x] #3 GQA exercised (n_kv_heads=2 < n_heads) via fused attention; no biases anywhere; dropout 0
 <!-- AC:END -->
 
 ## Implementation Plan
@@ -55,4 +56,21 @@ Decisions/gotchas:
 - Expected param counts (hand-computed, match plan doc-001 §9): 50M ~50.7M, 150M ~148M. Assert within tolerance, not exact.
 - The model returns logits only; cross-entropy loss is computed by the caller (test now, trainer later), not inside the model.
 - head_dim is derived (hidden_size // n_heads), not a config field.
+
+RESULT: make check green. count_params: 50m=50,675,200 (50.7M), 150m=148,152,960 (148.2M) - both within 5% and matching plan §9. Tiny untrained CE loss 4.81 (~ln 64=4.16), logits (B,T,vocab).
+
+MLX 0.32 gotchas discovered (apply to 002.02 io + 002.03 check script too):
+- mlx.core HAS type stubs (typed); mlx.nn has NO stubs. Added mypy override in pyproject.toml: [[tool.mypy.overrides]] module = "mlx.nn" / follow_imports = "skip" (else spurious attr-defined/name-defined for nn.Module, nn.Linear, ...). Kept # type: ignore[misc] on each nn.Module subclass (disallow_subclassing_any) and [no-any-return] where a nn.* layer result is returned.
+- No mx.polar / mx.view_as_complex / mx.view_as_real in the core stubs -> RoPE uses the real cos/sin (rotate-half) formulation, not complex.
+- mx.fast.scaled_dot_product_attention REQUIRES the scale= kwarg (float); pass 1.0/sqrt(head_dim).
+- No nn.ModuleList -> assign a plain list (nn.Module is a dict subclass; lists/dicts of submodules are auto-traversed by parameters()).
+- model.parameters() returns a NESTED dict (not a flat list) -> count_params uses mlx.utils.tree_flatten; there is NO model.named_parameters() -> get names via tree_flatten(model.parameters()).
+- Cross-entropy is mlx.nn.losses.cross_entropy (NOT mx.loss); default reduction="none", pass reduction="mean" for a scalar.
+- RMSNorm weight init to ones (mx.ones); linears/embedding use MLX default init.
 <!-- SECTION:NOTES:END -->
+
+## Final Summary
+
+<!-- SECTION:FINAL_SUMMARY:BEGIN -->
+Implemented the Kestrel decoder-only transformer in src/kestrel/model/kestrel.py (RMSNorm, cos/sin RoPE, GQA attention via fused mx.fast.scaled_dot_product_attention, SwiGLU FFN, pre-norm blocks, tied embeddings, count_params) + tests/test_model_kestrel.py. Verified: 50m=50,675,200 (50.7M) / 150m=148,152,960 (148.2M) params within 5% of target, forward pass returns (B,T,vocab) with finite CE loss, GQA (n_kv<n_heads) + no biases. Added mypy follow_imports=skip override for mlx.nn (no stubs) in pyproject.toml. make check green (37 tests).
+<!-- SECTION:FINAL_SUMMARY:END -->

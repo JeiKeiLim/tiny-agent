@@ -60,6 +60,13 @@ warn_unused_ignores = true
 module = ["mlx.*", "tokenizers.*", "datasets.*", "truststore.*"]
 ignore_missing_imports = true
 
+# MLX ships type stubs for mlx.core but none for mlx.nn, so mypy otherwise
+# reports spurious attr-defined / name-defined errors for nn.Module, nn.Linear,
+# etc. Treat the whole mlx.nn module as Any.
+[[tool.mypy.overrides]]
+module = "mlx.nn"
+follow_imports = "skip"
+
 [build-system]
 requires = ["uv_build>=0.11.26,<0.12.0"]
 build-backend = "uv_build"
