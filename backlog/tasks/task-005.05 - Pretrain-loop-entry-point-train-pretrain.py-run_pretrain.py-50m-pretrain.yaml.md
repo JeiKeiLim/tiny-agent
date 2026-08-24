@@ -6,7 +6,7 @@ title: >-
 status: To Do
 assignee: []
 created_date: '2026-08-24 01:56'
-updated_date: '2026-08-24 06:34'
+updated_date: '2026-08-24 08:12'
 labels: []
 milestone: m-1
 dependencies:
@@ -58,4 +58,6 @@ Quantitative targets:
 
 <!-- SECTION:NOTES:BEGIN -->
 ADDED (2026-08-24, from 005.01 split work): the corpus is now split into data/corpus/train + data/corpus/val. pretrain(config) must build BOTH a train dataset (input=data/corpus/train) and a val dataset (input=data/corpus/val) and pass both to the trainer (train for the step loop, val for in-loop val loss). PretrainConfig should derive the train/val dirs from the corpus output_dir (or take them explicitly).
+
+PLAN UPDATE (2026-08-24): total_tokens is a CAP on training tokens, not a fixed target - set it small for the fast TINY test (AC #1/#4) and to the full corpus (~275M) or null (= run until the corpus is exhausted) for the real single-pass validation run (005.06). The run is SINGLE-PASS by design (matches modern LLM pretraining: Chinchilla ~20 tokens/param, LLaMA 'each token used once'; no multi-epoch). TrainerConfig.betas now defaults to (0.9, 0.95) (beta2=0.95, the LLaMA/modern default) - no need to set it in the YAML.
 <!-- SECTION:NOTES:END -->

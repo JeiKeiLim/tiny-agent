@@ -39,6 +39,7 @@ class TrainerConfig(BaseConfig):
 
     lr: float = 3e-4
     weight_decay: float = 0.1
+    betas: tuple[float, float] = (0.9, 0.95)  # beta2=0.95 is the LLaMA/modern-LLM default
     batch_size: int = 8
     seq_len: int = 2048
     num_steps: int = 1000
@@ -114,7 +115,9 @@ def train(
     Checkpoints are written to ``config.output_dir`` every ``save_every`` steps
     (``step_<n>``) and a ``final`` checkpoint at the end.
     """
-    opt = optim.AdamW(learning_rate=config.lr, weight_decay=config.weight_decay)
+    opt = optim.AdamW(
+        learning_rate=config.lr, betas=list(config.betas), weight_decay=config.weight_decay
+    )
     history: list[tuple[int, float, float | None]] = []
     best_val: float | None = None
     step = 0

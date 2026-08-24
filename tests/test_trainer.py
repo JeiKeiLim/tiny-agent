@@ -72,6 +72,11 @@ def test_trainer_config_strict() -> None:
         TrainerConfig(bogus=1)  # type: ignore[call-arg]  # unknown key
 
 
+def test_trainer_config_default_betas() -> None:
+    assert TrainerConfig().betas == (0.9, 0.95)  # beta2=0.95 is the LLaMA/modern default
+    TrainerConfig(betas=(0.9, 0.99))  # custom betas accepted
+
+
 def test_lr_schedule() -> None:
     cfg = TrainerConfig(lr=1.0, warmup_steps=10, num_steps=50)
     assert lr_at(0, cfg) == 0.0  # starts at 0
