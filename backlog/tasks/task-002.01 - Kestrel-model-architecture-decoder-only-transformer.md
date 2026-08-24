@@ -5,7 +5,7 @@ status: Done
 assignee:
   - '@limjk'
 created_date: '2026-08-24 00:15'
-updated_date: '2026-08-24 00:45'
+updated_date: '2026-08-24 00:55'
 labels: []
 milestone: m-0
 dependencies: []
@@ -67,6 +67,8 @@ MLX 0.32 gotchas discovered (apply to 002.02 io + 002.03 check script too):
 - model.parameters() returns a NESTED dict (not a flat list) -> count_params uses mlx.utils.tree_flatten; there is NO model.named_parameters() -> get names via tree_flatten(model.parameters()).
 - Cross-entropy is mlx.nn.losses.cross_entropy (NOT mx.loss); default reduction="none", pass reduction="mean" for a scalar.
 - RMSNorm weight init to ones (mx.ones); linears/embedding use MLX default init.
+
+Refinement (2026-08-24): forward + GQA tests now load the REAL 50M config (FIFTY_M_CONFIG) instead of a toy _tiny_config() - dropped. Rationale (user principle): unit tests should be as close to real usage as possible. The real config is fast enough (~1s suite), and it exercises the production shape (head_dim=64, GQA 8:2) rather than a 2-layer/head_dim-16 multi-query toy. make check still green (37 tests).
 <!-- SECTION:NOTES:END -->
 
 ## Final Summary

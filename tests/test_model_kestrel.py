@@ -9,9 +9,11 @@ from kestrel.common.config import load_config
 from kestrel.model.config import ModelConfig
 from kestrel.model.kestrel import Kestrel, count_params
 
+MODEL_50M = "configs/kestrel/50m/model.yaml"
+MODEL_150M = "configs/kestrel/150m/model.yaml"
 REAL_CONFIGS = [
-    ("configs/kestrel/50m/model.yaml", 50_000_000),
-    ("configs/kestrel/150m/model.yaml", 150_000_000),
+    (MODEL_50M, 50_000_000),
+    (MODEL_150M, 150_000_000),
 ]
 
 
@@ -23,22 +25,8 @@ def test_param_count_near_expected(path: str, expected: int) -> None:
     assert abs(n - expected) / expected < 0.05, f"{config.name}: {n} not within 5% of {expected}"
 
 
-def _tiny_config() -> ModelConfig:
-    # n_kv_heads < n_heads so GQA is exercised; hidden_size // n_heads is even.
-    return ModelConfig(
-        name="tiny",
-        vocab_size=64,
-        context_length=16,
-        n_layers=2,
-        n_heads=2,
-        n_kv_heads=1,
-        hidden_size=32,
-        intermediate_size=64,
-    )
-
-
 def test_forward_shape_and_finite_loss() -> None:
-    config = _tiny_config()
+    config = load_config(MODEL_50M, ModelConfig)
     model = Kestrel(config)
     B, T = 1, 8
     x = mx.random.randint(0, config.vocab_size, (B, T))
@@ -49,7 +37,7 @@ def test_forward_shape_and_finite_loss() -> None:
 
 
 def test_gqa_and_no_biases() -> None:
-    config = _tiny_config()
+    config = load_config(MODEL_50M, ModelConfig)
     assert config.n_kv_heads < config.n_heads
     model = Kestrel(config)
     names = [name for name, _ in tree_flatten(model.parameters())]
