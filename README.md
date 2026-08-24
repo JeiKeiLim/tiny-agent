@@ -25,13 +25,14 @@ Kestrel trains a **pair of small decoder-only models (50M and 150M)** from scrat
 
 ## Status
 
-Foundation (Milestone M0) is in progress:
+**Milestone M0 (Foundation) is complete** — all 10 tasks done:
 
 - **Scaffolding** (`TASK-001`) — the `src/kestrel/` package, the generic YAML→Pydantic config loader, `ModelConfig`, sample configs, and the uv environment.
 - **Code quality infra** (`TASK-004`) — strict Pydantic configs, Ruff + mypy (strict) + pytest, and the `make check` gate.
 - **BPE tokenizer** (`TASK-003`) — training-data prep, 16k-vocab byte-level BPE training, round-trip + byte-coverage verification (as tests), and an interactive explorer. Guarantees a lossless round-trip for any byte sequence (all 256 byte-tokens are in the vocab).
+- **Kestrel model** (`TASK-002`) — the decoder-only transformer (`model/kestrel.py`: pre-norm RMSNorm, RoPE, GQA, SwiGLU, tied embeddings), model I/O (`model/io.py`: `load(config, checkpoint)` + `save(model, path)`), and a smoke-test CLI (`scripts/check_model.py`).
 
-Next: the Kestrel model (`TASK-002`). The remaining modules are designed in the project plan and are being built milestone by milestone.
+Next: the remaining pipeline stages (pretrain → long-context → SFT → RL → serve + agent → eval) are designed in the project plan and will be built milestone by milestone, starting with pretraining.
 
 ## Repo layout
 
@@ -104,6 +105,16 @@ An interactive explorer renders any text as color-blocked token spans with the t
 ```bash
 uv run python scripts/visualize_tokenizer.py [--verbose]
 ```
+
+### Model check
+
+A standalone smoke-test CLI loads a model (random-init or from a checkpoint), runs a forward pass, and prints the param count, logits shape, CE loss, and top-k tokens:
+
+```bash
+uv run python scripts/check_model.py --config configs/kestrel/50m/model.yaml
+```
+
+Add `--checkpoint <path>` to load a trained checkpoint instead of random init. On an untrained model the loss is ~ln(vocab) (~9.7 for 16k) and the top tokens are gibberish — expected, not a bug.
 
 ## Code quality
 
