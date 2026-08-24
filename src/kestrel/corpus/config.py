@@ -50,11 +50,20 @@ class CorpusConfig(BaseConfig):
 
     Each component is read/streamed up to ``total_bytes * fraction`` (or until
     the source is exhausted). Component fractions must sum to 1.0.
+
+    The assembled corpus is split into train/val(/test) by a deterministic,
+    order-independent per-line hash (seeded by ``seed``): each line is routed to
+    ``test`` if its hash falls in ``[0, test_fraction)``, else ``val`` if in
+    ``[test_fraction, test_fraction + val_fraction)``, else ``train``. This gives
+    a reproducible held-out validation (and optional test) slice of the same
+    distribution, with no document leaking across splits.
     """
 
     total_bytes: int = Field(gt=0)
     seed: int = 0
     output_dir: str = "data/corpus"
+    val_fraction: float = Field(ge=0.0, le=1.0, default=0.1)
+    test_fraction: float = Field(ge=0.0, le=1.0, default=0.0)
     components: list[ComponentConfig] = Field(min_length=1)
 
     @model_validator(mode="after")
@@ -62,5 +71,11 @@ class CorpusConfig(BaseConfig):
         total = sum(c.fraction for c in self.components)
         if abs(total - 1.0) > 1e-6:
             msg = f"component fractions must sum to 1.0, got {total}"
+            raise ValueError(msg)
+        if self.val_fraction + self.test_fraction > 1.0 + 1e-6:
+            msg = (
+                f"val_fraction + test_fraction must be <= 1.0, "
+                f"got {self.val_fraction + self.test_fraction}"
+            )
             raise ValueError(msg)
         return self
