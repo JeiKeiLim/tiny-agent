@@ -3,10 +3,11 @@ id: TASK-005.05
 title: >-
   Pretrain loop + entry point (train/pretrain.py, run_pretrain.py,
   50m/pretrain.yaml)
-status: To Do
-assignee: []
+status: In Progress
+assignee:
+  - '@7477cb22-9a4d-4bfc-9c19-64c3784d2b3a'
 created_date: '2026-08-24 01:56'
-updated_date: '2026-08-24 08:12'
+updated_date: '2026-08-24 08:25'
 labels: []
 milestone: m-1
 dependencies:
@@ -48,11 +49,17 @@ Quantitative targets:
 
 ## Acceptance Criteria
 <!-- AC:BEGIN -->
-- [ ] #1 pretrain(config) runs end-to-end on a TINY config (tiny model + tiny local corpus + few steps): loss finite and decreasing, checkpoint written to output_dir
-- [ ] #2 scripts/run_pretrain.py --config <path> runs the same path via CLI (argparse, mirrors check_model.py)
-- [ ] #3 configs/kestrel/50m/pretrain.yaml loads into PretrainConfig (strict) with seq_len 2048 and total_tokens ~50M
-- [ ] #4 tests/test_pretrain.py uses a TINY config (tiny model + tiny local corpus + few steps) so it runs fast; make check green
+- [x] #1 pretrain(config) runs end-to-end on a TINY config (tiny model + tiny local corpus + few steps): loss finite and decreasing, checkpoint written to output_dir
+- [x] #2 scripts/run_pretrain.py --config <path> runs the same path via CLI (argparse, mirrors check_model.py)
+- [x] #3 configs/kestrel/50m/pretrain.yaml loads into PretrainConfig (strict) with seq_len 2048 and total_tokens null (single pass)
+- [x] #4 tests/test_pretrain.py uses a TINY config (tiny model + tiny local corpus + few steps) so it runs fast; make check green
 <!-- AC:END -->
+
+## Implementation Plan
+
+<!-- SECTION:PLAN:BEGIN -->
+1. src/kestrel/train/pretrain.py: PretrainConfig (strict: model/tokenizer/corpus paths, total_tokens int|None, embedded TrainerConfig) + pretrain(config)->TrainResult (load model random-init -> corpus.builder.build -> train+val PretrainDataset from corpus.output_dir/{train,val} -> train.trainer; trainer saves final ckpt). 2. scripts/run_pretrain.py: argparse --config, load_config(PretrainConfig), pretrain(), print summary (mirrors check_model.py). 3. configs/kestrel/50m/pretrain.yaml: seq_len 2048, total_tokens null (single pass), betas unset (default 0.9/0.95). 4. tests/test_pretrain.py: TINY end-to-end (tiny model vocab 400 + in-test tokenizer + tiny local corpus, few steps) asserts loss finite+decreasing + final ckpt written; strict-config rejects unknown keys; real 50m YAML loads with seq_len 2048. Gate: make check green.
+<!-- SECTION:PLAN:END -->
 
 ## Implementation Notes
 
@@ -60,4 +67,6 @@ Quantitative targets:
 ADDED (2026-08-24, from 005.01 split work): the corpus is now split into data/corpus/train + data/corpus/val. pretrain(config) must build BOTH a train dataset (input=data/corpus/train) and a val dataset (input=data/corpus/val) and pass both to the trainer (train for the step loop, val for in-loop val loss). PretrainConfig should derive the train/val dirs from the corpus output_dir (or take them explicitly).
 
 PLAN UPDATE (2026-08-24): total_tokens is a CAP on training tokens, not a fixed target - set it small for the fast TINY test (AC #1/#4) and to the full corpus (~275M) or null (= run until the corpus is exhausted) for the real single-pass validation run (005.06). The run is SINGLE-PASS by design (matches modern LLM pretraining: Chinchilla ~20 tokens/param, LLaMA 'each token used once'; no multi-epoch). TrainerConfig.betas now defaults to (0.9, 0.95) (beta2=0.95, the LLaMA/modern default) - no need to set it in the YAML.
+
+IMPLEMENTED (2026-08-24): created src/kestrel/train/pretrain.py (PretrainConfig + pretrain), scripts/run_pretrain.py (CLI), configs/kestrel/50m/pretrain.yaml, tests/test_pretrain.py. make check green (76 tests, 3 new). CLI smoke-tested on a tiny config: loss 4.42->1.90, val 3.92->1.87 over 30 steps, final ckpt written. Gotchas: (1) YAML parses '3e-4' as a string under strict Pydantic - write lr as 0.0003; (2) TrainerConfig.betas is a tuple and does NOT survive a YAML round-trip (becomes a list, rejected by strict mode) - omit betas from YAML to use the default (0.9, 0.95).
 <!-- SECTION:NOTES:END -->

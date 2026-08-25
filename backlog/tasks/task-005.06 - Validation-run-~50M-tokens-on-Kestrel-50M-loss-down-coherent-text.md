@@ -3,15 +3,16 @@ id: TASK-005.06
 title: >-
   Validation run - full ~275M-token single pass on Kestrel-50M (loss down +
   English-like text)
-status: To Do
+status: In Progress
 assignee: []
 created_date: '2026-08-24 01:57'
-updated_date: '2026-08-24 08:11'
+updated_date: '2026-08-25 00:13'
 labels: []
 milestone: m-1
 dependencies:
   - TASK-005.05
   - TASK-005.04
+  - TASK-005.07
 references:
   - backlog/docs/doc-001 - Agentic-SLM-Training-Pipeline-—-Project-Plan.md
 parent_task_id: TASK-005
@@ -42,3 +43,13 @@ Quantitative targets (the M1 gate):
 - [ ] #3 the final checkpoint is saved and reloads via kestrel.model.io.load
 - [ ] #4 record final loss, tokens/sec, and wall-clock time in the task notes (benchmarks the ~30k tok/s estimate from doc-001 section 2)
 <!-- AC:END -->
+
+## Implementation Notes
+
+<!-- SECTION:NOTES:BEGIN -->
+2026-08-25 attention spike + fix (TASK-005.07): the model was missing a causal mask; Attention now uses causal query-chunked SDPA. Benchmarks (15-layer 50M shape, B=8, float32, one fwd+bwd+AdamW step): T=1024 1.28s/step, peak 12.79GB, ~6.4k tok/s; T=2048 chunk=1024 11.44s/step, peak 33.34GB, ~1.4k tok/s. Full 275M-token single-pass estimate: ~12h at T=1024, ~54h at T=2048. M1 should use seq_len=1024 unless 2048 context is explicitly required.
+
+2026-08-25 user selected seq_len=1024 for M1. Updated configs/kestrel/50m/pretrain.yaml to seq_len=1024 and num_steps=40000; make check green.
+
+2026-08-25 identified in-loop validation bias: PretrainDataset reads corpus domain files sequentially, so the current M1 val loss is not a representative web/code/jsonl mix. Created TASK-005.02.01 to add deterministic weighted multi-file mixing. Do not interpret current/previous M1 val loss as mixed-domain until that task lands.
+<!-- SECTION:NOTES:END -->

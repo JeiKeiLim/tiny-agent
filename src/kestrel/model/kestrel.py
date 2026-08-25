@@ -1,7 +1,7 @@
 """Kestrel decoder-only transformer (plan §9).
 
 A small GPT-style model: pre-norm RMSNorm, rotary position embeddings (RoPE),
-SwiGLU feed-forward, grouped-query attention (GQA) via fused
+SwiGLU feed-forward, causal grouped-query attention (GQA) via
 ``mx.fast.scaled_dot_product_attention``, and tied input/output embeddings.
 No biases, dropout 0. ``Kestrel.__call__`` returns logits of shape
 ``(B, T, vocab_size)``; the cross-entropy loss is computed by the caller.
@@ -36,6 +36,40 @@ def apply_rotary_emb(
     return _apply(xq), _apply(xk)
 
 
+def causal_sdpa(
+    q: mx.array,
+    k: mx.array,
+    v: mx.array,
+    *,
+    scale: float,
+    chunk_size: int = 1024,
+) -> mx.array:
+    """Causal GQA scaled-dot-product attention.
+
+    Uses the fused causal path when the query sequence fits in one chunk.
+    Otherwise processes query chunks against the full key/value sequence. The
+    final chunk can use MLX's lower-right-aligned ``"causal"`` mask; earlier
+    chunks need an explicit boolean mask.
+    """
+    T = q.shape[2]
+    if chunk_size >= T:
+        return mx.fast.scaled_dot_product_attention(q, k, v, scale=scale, mask="causal")
+
+    key_pos = mx.arange(T)[None, :]
+    outs: list[mx.array] = []
+    for start in range(0, T, chunk_size):
+        end = min(start + chunk_size, T)
+        qc = q[:, :, start:end, :]
+        if end == T:
+            out = mx.fast.scaled_dot_product_attention(qc, k, v, scale=scale, mask="causal")
+        else:
+            query_pos = mx.arange(start, end)[:, None]
+            mask = (key_pos <= query_pos)[None, None, :, :]
+            out = mx.fast.scaled_dot_product_attention(qc, k, v, scale=scale, mask=mask)
+        outs.append(out)
+    return mx.concatenate(outs, axis=2)
+
+
 class RMSNorm(nn.Module):  # type: ignore[misc]
     """Root-mean-square layer norm (no bias, no mean centering)."""
 
@@ -50,7 +84,7 @@ class RMSNorm(nn.Module):  # type: ignore[misc]
 
 
 class Attention(nn.Module):  # type: ignore[misc]
-    """Grouped-query attention with RoPE (fused SDPA, native GQA)."""
+    """Causal grouped-query attention with RoPE (query-chunked SDPA, native GQA)."""
 
     def __init__(self, config: ModelConfig) -> None:
         super().__init__()
@@ -70,7 +104,7 @@ class Attention(nn.Module):  # type: ignore[misc]
         v = self.v_proj(x).reshape(B, T, self.n_kv_heads, self.head_dim).transpose(0, 2, 1, 3)
         q, k = apply_rotary_emb(q, k, cos, sin)
         scale = 1.0 / (self.head_dim**0.5)
-        out = mx.fast.scaled_dot_product_attention(q, k, v, scale=scale)
+        out = causal_sdpa(q, k, v, scale=scale)
         out = out.transpose(0, 2, 1, 3).reshape(B, T, self.n_heads * self.head_dim)
         return self.o_proj(out)  # type: ignore[no-any-return]
 

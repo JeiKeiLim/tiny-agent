@@ -7,7 +7,7 @@ from mlx.utils import tree_flatten
 
 from kestrel.common.config import load_config
 from kestrel.model.config import ModelConfig
-from kestrel.model.kestrel import Kestrel, count_params
+from kestrel.model.kestrel import Kestrel, causal_sdpa, count_params
 
 MODEL_50M = "configs/kestrel/50m/model.yaml"
 MODEL_150M = "configs/kestrel/150m/model.yaml"
@@ -43,3 +43,46 @@ def test_gqa_and_no_biases() -> None:
     names = [name for name, _ in tree_flatten(model.parameters())]
     assert names, "model has no parameters"
     assert not any("bias" in name for name in names)
+
+
+def test_causal_sdpa_chunked_matches_full() -> None:
+    mx.random.seed(0)
+    B, N, Nkv, T, D = 2, 4, 2, 16, 8
+    scale = D**-0.5
+    q = mx.random.normal((B, N, T, D))
+    k = mx.random.normal((B, Nkv, T, D))
+    v = mx.random.normal((B, Nkv, T, D))
+
+    full = mx.fast.scaled_dot_product_attention(q, k, v, scale=scale, mask="causal")
+    chunked = causal_sdpa(q, k, v, scale=scale, chunk_size=8)
+
+    diff = mx.max(mx.abs(full - chunked)).item()
+    assert diff < 1e-5, f"chunked causal SDPA mismatch: {diff}"
+
+
+def test_attention_is_causal() -> None:
+    mx.random.seed(1)
+    config = ModelConfig(
+        name="tiny",
+        vocab_size=32,
+        context_length=16,
+        n_layers=1,
+        n_heads=2,
+        n_kv_heads=1,
+        hidden_size=16,
+        intermediate_size=32,
+        rope_theta=10000.0,
+    )
+    model = Kestrel(config)
+
+    prefix = mx.random.randint(0, config.vocab_size, (1, 5))
+    future_a = mx.random.randint(0, config.vocab_size, (1, 3))
+    future_b = mx.random.randint(0, config.vocab_size, (1, 3))
+    x_a = mx.concatenate([prefix, future_a], axis=1)
+    x_b = mx.concatenate([prefix, future_b], axis=1)
+
+    logits_a = model(x_a)
+    logits_b = model(x_b)
+
+    diff = mx.max(mx.abs(logits_a[:, :5] - logits_b[:, :5])).item()
+    assert diff < 1e-4, f"future tokens changed earlier logits: {diff}"

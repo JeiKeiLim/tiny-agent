@@ -12,6 +12,7 @@ at a pretraining output later requires no code change.
 Usage:
     uv run python scripts/check_model.py --config configs/kestrel/50m/model.yaml
     uv run python scripts/check_model.py --checkpoint checkpoints/pretrain/kestrel-50m
+    uv run python scripts/check_model.py --checkpoint ... --generate --max-tokens 256 --temp 0.8
 
 An untrained (random-init) model gives a loss near ln(vocab) (~9.7 for 16k) and
 gibberish top tokens — expected, not a bug.
@@ -30,6 +31,7 @@ from tokenizers import Tokenizer
 
 from kestrel.common.config import load_config
 from kestrel.model.config import ModelConfig
+from kestrel.model.generate import generate
 from kestrel.model.io import load
 from kestrel.model.kestrel import Kestrel, count_params
 
@@ -98,9 +100,12 @@ def main() -> None:
     parser.add_argument(
         "--checkpoint", default=None, help="checkpoint dir (weights.npz); random-init if omitted"
     )
-    parser.add_argument("--text", default=DEFAULT_TEXT, help="sample sentence to tokenize")
+    parser.add_argument("--text", default=DEFAULT_TEXT, help="sample sentence / generation prompt")
     parser.add_argument("--top-k", type=int, default=5, help="number of top argmax tokens to show")
     parser.add_argument("--tokenizer", default=DEFAULT_TOKENIZER, help="path to tokenizer.json")
+    parser.add_argument("--generate", action="store_true", help="generate text after the report")
+    parser.add_argument("--max-tokens", type=int, default=128, help="maximum tokens to generate")
+    parser.add_argument("--temp", type=float, default=0.0, help="sampling temperature (0 = greedy)")
     args = parser.parse_args()
 
     tokenizer_path = Path(args.tokenizer)
@@ -110,8 +115,15 @@ def main() -> None:
         raise SystemExit(1)
 
     config = load_config(args.config, ModelConfig)
-    report = check_model(config, args.checkpoint, args.text, args.top_k, tokenizer_path)
+    model = load(config, args.checkpoint)
+    tokenizer = Tokenizer.from_file(str(tokenizer_path))
+    report = report_from_model(model, tokenizer, args.text, args.top_k)
     _print_report(report, args.text)
+
+    if args.generate:
+        generated = generate(model, tokenizer, args.text, args.max_tokens, temp=args.temp)
+        print(f"\ngenerated (max_tokens={args.max_tokens}, temp={args.temp}):")
+        print(generated)
 
 
 if __name__ == "__main__":
