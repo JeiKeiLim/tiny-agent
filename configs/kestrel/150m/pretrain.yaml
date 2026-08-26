@@ -24,3 +24,5 @@ trainer:
   eval_every: 1000
   eval_iters: 10
   output_dir: checkpoints/pretrain/150m
+  keep_latest_checkpoints: 5
+  keep_best_checkpoint: true

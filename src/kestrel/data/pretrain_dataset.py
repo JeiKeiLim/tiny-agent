@@ -23,9 +23,10 @@ import json
 import math
 import random
 from array import array
-from collections.abc import Generator, Iterator, Sequence
+from collections.abc import Iterator, Sequence
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Any, BinaryIO
 
 import mlx.core as mx
 import numpy as np
@@ -99,22 +100,39 @@ def _source_shuffle_seed(config_seed: int, domain: str) -> int:
     return int.from_bytes(digest[:8], "big")
 
 
-def _iter_documents_shuffled(path: Path, seed: int) -> Generator[str]:
-    """Yield document texts from a corpus file in deterministic shuffled order.
+class _ShuffledDocumentSource:
+    """Deterministically shuffled document stream for one corpus file.
 
     Only physical line offsets are stored in memory; document text is read by
-    seeking to each shuffled offset.
+    seeking to each shuffled offset. The shuffled offset order is recomputed
+    from the file and seed, so checkpoint state only needs the integer position.
     """
-    offsets = _line_offsets(path)
-    if offsets.size:
-        np.random.default_rng(seed).shuffle(offsets)
 
-    is_jsonl = path.suffix == ".jsonl"
-    with path.open("rb") as fin:
-        for offset in offsets:
-            fin.seek(int(offset))
+    def __init__(self, path: Path, seed: int) -> None:
+        self.path = path
+        self.seed = seed
+        self.is_jsonl = path.suffix == ".jsonl"
+        self.offsets = _line_offsets(path)
+        if self.offsets.size:
+            np.random.default_rng(seed).shuffle(self.offsets)
+        self.position = 0
+        self._fin: BinaryIO | None = None
+
+    def _ensure_open(self) -> BinaryIO:
+        if self._fin is None:
+            self._fin = self.path.open("rb")
+        return self._fin
+
+    def next_text(self) -> str:
+        if self.position >= self.offsets.size:
+            raise StopIteration
+        fin = self._ensure_open()
+        while self.position < self.offsets.size:
+            offset = int(self.offsets[self.position])
+            self.position += 1
+            fin.seek(offset)
             line = fin.readline().decode("utf-8")
-            if is_jsonl:
+            if self.is_jsonl:
                 line = line.rstrip("\n")
                 if not line.strip():
                     continue
@@ -122,7 +140,31 @@ def _iter_documents_shuffled(path: Path, seed: int) -> Generator[str]:
             else:
                 text = line.rstrip("\r\n")
             if text.strip():
-                yield text
+                return text
+        self.close()
+        raise StopIteration
+
+    def close(self) -> None:
+        if self._fin is not None:
+            self._fin.close()
+            self._fin = None
+
+    def state(self) -> dict[str, int]:
+        return {"position": self.position, "total": int(self.offsets.size)}
+
+    def load_state(self, state: dict[str, int]) -> None:
+        expected = int(state["total"])
+        if expected != self.offsets.size:
+            msg = (
+                f"corpus file changed for {self.path}: "
+                f"expected {expected} documents, found {self.offsets.size}"
+            )
+            raise ValueError(msg)
+        position = int(state["position"])
+        if position < 0 or position > self.offsets.size:
+            msg = f"invalid shuffled document position {position} for {self.path}"
+            raise ValueError(msg)
+        self.position = position
 
 
 def _as_int(value: object) -> int | None:
@@ -295,68 +337,174 @@ class PretrainDataset:
             tokens = min(tokens, self.config.total_tokens)
         return tokens // (self.config.batch_size * self.config.context_length)
 
+    def iterator(self) -> PretrainDatasetIterator:
+        """Return a fresh resumable iterator over the dataset."""
+        return PretrainDatasetIterator(self)
+
+    def load_iterator(self, state: dict[str, Any]) -> PretrainDatasetIterator:
+        """Return an iterator restored from a :meth:`PretrainDatasetIterator.state_dict`."""
+        iterator = self.iterator()
+        iterator.load_state_dict(state)
+        return iterator
+
     def __iter__(self) -> Iterator[tuple[mx.array, mx.array, mx.array]]:
-        t = self.config.context_length
-        b = self.config.batch_size
-        cap = self.config.total_tokens
-        sources = self._sources
-        active = list(range(len(sources)))
-        emitted = [0.0] * len(sources)
-        fractions = [source.target_fraction for source in sources]
-        rng = random.Random(self.config.seed)
+        return self.iterator()
 
-        buf: list[int] = []
-        doc_buf: list[int] = []
-        batch_in: list[list[int]] = []
-        batch_tgt: list[list[int]] = []
-        batch_doc: list[list[int]] = []
-        emitted_total = 0
-        next_doc_id = 0
-        iterators: list[Generator[str] | None] = [None] * len(sources)
 
-        try:
-            while active:
-                index = choose_deficit_source(active, fractions, emitted, rng)
-                source = sources[index]
-                iterator = iterators[index]
-                if iterator is None:
-                    seed = _source_shuffle_seed(self.config.seed, source.domain)
-                    iterator = _iter_documents_shuffled(source.path, seed)
-                    iterators[index] = iterator
-                try:
-                    text = next(iterator)
-                except StopIteration:
-                    active.remove(index)
-                    continue
+class PretrainDatasetIterator:
+    """Resumable iterator that yields ``(input, target, doc_ids)`` int32 batches."""
 
-                token_ids = self._tokenizer.encode(text, add_special_tokens=False).ids
-                if not token_ids:
-                    continue
-                seq = [self._im_start, *token_ids, self._im_end]
-                buf.extend(seq)
-                doc_buf.extend([next_doc_id] * len(seq))
-                next_doc_id += 1
-                emitted[index] += len(seq)
+    def __init__(self, dataset: PretrainDataset) -> None:
+        self._dataset = dataset
+        config = dataset.config
+        self._t = config.context_length
+        self._b = config.batch_size
+        self._cap = config.total_tokens
+        self._sources = dataset._sources
+        self._fractions = [source.target_fraction for source in self._sources]
+        self._active = list(range(len(self._sources)))
+        self._emitted = [0.0] * len(self._sources)
+        self._rng = random.Random(config.seed)
+        self._buf: list[int] = []
+        self._doc_buf: list[int] = []
+        self._batch_in: list[list[int]] = []
+        self._batch_tgt: list[list[int]] = []
+        self._batch_doc: list[list[int]] = []
+        self._emitted_total = 0
+        self._next_doc_id = 0
+        self._source_iters: list[_ShuffledDocumentSource | None] = [None] * len(self._sources)
+        self._closed = False
 
-                while len(buf) >= t:
-                    window = buf[:t]
-                    del buf[:t]
-                    doc_window = doc_buf[:t]
-                    del doc_buf[:t]
-                    batch_in.append(window)
-                    batch_tgt.append([*window[1:], window[-1]])
-                    batch_doc.append(doc_window)
-                    emitted_total += t
-                    if len(batch_in) == b:
-                        yield (
-                            mx.array(batch_in, dtype=mx.int32),
-                            mx.array(batch_tgt, dtype=mx.int32),
-                            mx.array(batch_doc, dtype=mx.int32),
-                        )
-                        batch_in, batch_tgt, batch_doc = [], [], []
-                    if cap is not None and emitted_total >= cap:
-                        return
-        finally:
-            for iterator in iterators:
-                if iterator is not None:
-                    iterator.close()
+    def __iter__(self) -> PretrainDatasetIterator:
+        return self
+
+    def close(self) -> None:
+        if self._closed:
+            return
+        self._closed = True
+        for source in self._source_iters:
+            if source is not None:
+                source.close()
+
+    def __next__(self) -> tuple[mx.array, mx.array, mx.array]:
+        if self._closed:
+            raise StopIteration
+        if self._cap is not None and self._emitted_total >= self._cap:
+            self.close()
+            raise StopIteration
+
+        while True:
+            while len(self._buf) >= self._t and len(self._batch_in) < self._b:
+                window = self._buf[: self._t]
+                del self._buf[: self._t]
+                doc_window = self._doc_buf[: self._t]
+                del self._doc_buf[: self._t]
+                self._batch_in.append(window)
+                self._batch_tgt.append([*window[1:], window[-1]])
+                self._batch_doc.append(doc_window)
+                self._emitted_total += self._t
+
+            if len(self._batch_in) == self._b:
+                batch = (
+                    mx.array(self._batch_in, dtype=mx.int32),
+                    mx.array(self._batch_tgt, dtype=mx.int32),
+                    mx.array(self._batch_doc, dtype=mx.int32),
+                )
+                self._batch_in = []
+                self._batch_tgt = []
+                self._batch_doc = []
+                if self._cap is not None and self._emitted_total >= self._cap:
+                    self.close()
+                return batch
+
+            if not self._active:
+                self.close()
+                raise StopIteration
+
+            self._append_next_document()
+
+    def _append_next_document(self) -> None:
+        """Append one non-empty document from the token-deficit scheduler."""
+        while self._active:
+            index = choose_deficit_source(self._active, self._fractions, self._emitted, self._rng)
+            source = self._sources[index]
+            source_iter = self._source_iters[index]
+            if source_iter is None:
+                seed = _source_shuffle_seed(self._dataset.config.seed, source.domain)
+                source_iter = _ShuffledDocumentSource(source.path, seed)
+                self._source_iters[index] = source_iter
+            try:
+                text = source_iter.next_text()
+            except StopIteration:
+                self._active.remove(index)
+                continue
+
+            token_ids = self._dataset._tokenizer.encode(text, add_special_tokens=False).ids
+            if not token_ids:
+                continue
+            seq = [self._dataset._im_start, *token_ids, self._dataset._im_end]
+            self._buf.extend(seq)
+            self._doc_buf.extend([self._next_doc_id] * len(seq))
+            self._next_doc_id += 1
+            self._emitted[index] += len(seq)
+            return
+
+    def state_dict(self) -> dict[str, Any]:
+        """Return a JSON-serializable snapshot of the iterator position."""
+        return {
+            "format_version": 1,
+            "config": self._dataset.config.model_dump(),
+            "active": list(self._active),
+            "emitted": list(self._emitted),
+            "emitted_total": self._emitted_total,
+            "next_doc_id": self._next_doc_id,
+            "buf": list(self._buf),
+            "doc_buf": list(self._doc_buf),
+            "batch_in": [list(row) for row in self._batch_in],
+            "batch_tgt": [list(row) for row in self._batch_tgt],
+            "batch_doc": [list(row) for row in self._batch_doc],
+            "rng_state": list(self._rng.getstate()),
+            "source_states": [
+                source.state() if source is not None else None for source in self._source_iters
+            ],
+        }
+
+    def load_state_dict(self, state: dict[str, Any]) -> None:
+        """Restore iterator position from a :meth:`state_dict` snapshot."""
+        if state.get("format_version") != 1:
+            msg = f"unsupported dataset state format_version: {state.get('format_version')!r}"
+            raise ValueError(msg)
+        current_config = self._dataset.config.model_dump()
+        if state.get("config") != current_config:
+            msg = "dataset state was created with a different PretrainDatasetConfig"
+            raise ValueError(msg)
+
+        self.close()
+        self._closed = False
+        self._active = [int(index) for index in state["active"]]
+        self._emitted = [float(value) for value in state["emitted"]]
+        self._emitted_total = int(state["emitted_total"])
+        self._next_doc_id = int(state["next_doc_id"])
+        self._buf = [int(token) for token in state["buf"]]
+        self._doc_buf = [int(doc_id) for doc_id in state["doc_buf"]]
+        self._batch_in = [[int(token) for token in row] for row in state["batch_in"]]
+        self._batch_tgt = [[int(token) for token in row] for row in state["batch_tgt"]]
+        self._batch_doc = [[int(doc_id) for doc_id in row] for row in state["batch_doc"]]
+
+        rng_state = state["rng_state"]
+        self._rng.setstate((rng_state[0], tuple(rng_state[1]), rng_state[2]))
+
+        source_states = state["source_states"]
+        if len(source_states) != len(self._sources):
+            msg = "dataset state source_states length does not match the current corpus"
+            raise ValueError(msg)
+        self._source_iters = [None] * len(self._sources)
+        for index, raw_state in enumerate(source_states):
+            if raw_state is None:
+                continue
+            source = self._sources[index]
+            source_iter = _ShuffledDocumentSource(
+                source.path, _source_shuffle_seed(self._dataset.config.seed, source.domain)
+            )
+            source_iter.load_state(raw_state)
+            self._source_iters[index] = source_iter

@@ -1,9 +1,10 @@
 ---
 id: TASK-005.12.01
 title: Trainer checkpoint retention + best-val checkpoint
-status: To Do
+status: Done
 assignee: []
 created_date: '2026-08-26 04:14'
+updated_date: '2026-08-26 04:45'
 labels:
   - training
   - checkpoint
@@ -60,9 +61,21 @@ Gate: make check green.
 
 ## Acceptance Criteria
 <!-- AC:BEGIN -->
-- [ ] #1 TrainerConfig supports keep_latest_checkpoints and keep_best_checkpoint under strict validation
-- [ ] #2 Only N latest step_NNNNNN checkpoints are retained when keep_latest_checkpoints is set
-- [ ] #3 best and final checkpoints are never pruned
-- [ ] #4 A best checkpoint is written when validation loss improves
-- [ ] #5 make check is green
+- [x] #1 TrainerConfig supports keep_latest_checkpoints and keep_best_checkpoint under strict validation
+- [x] #2 Only N latest step_NNNNNN checkpoints are retained when keep_latest_checkpoints is set
+- [x] #3 best and final checkpoints are never pruned
+- [x] #4 A best checkpoint is written when validation loss improves
+- [x] #5 make check is green
 <!-- AC:END -->
+
+## Implementation Notes
+
+<!-- SECTION:NOTES:BEGIN -->
+2026-08-26: Implemented bounded step-checkpoint pruning and best-val checkpoint writing in the shared trainer. keep_latest_checkpoints defaults to 3 and None disables pruning; keep_best_checkpoint defaults to true. Pruning only touches step_NNNNNN directories, using mtime with step-number tie-breaker, and never deletes best/final/unrecognized paths. Best checkpoints are weights-only in this subtask; full resumable checkpoints remain TASK-005.12.02. make check green with 128 tests.
+<!-- SECTION:NOTES:END -->
+
+## Final Summary
+
+<!-- SECTION:FINAL_SUMMARY:BEGIN -->
+Trainer now supports strict keep_latest_checkpoints/keep_best_checkpoint config, prunes only step_NNNNNN directories, writes best on strict validation-loss improvement, and always preserves best/final. Verified with make check (128 tests).
+<!-- SECTION:FINAL_SUMMARY:END -->

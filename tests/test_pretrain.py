@@ -8,9 +8,14 @@ a train and a val slice, while staying highly repetitive so the tiny model can
 drive the loss down in a few dozen steps.
 """
 
+from __future__ import annotations
+
+import importlib.util
 import json
 import math
+import sys
 from pathlib import Path
+from typing import Any, cast
 
 import pytest
 import yaml
@@ -18,12 +23,18 @@ from pydantic import ValidationError
 
 from kestrel.common.config import load_config
 from kestrel.corpus.config import ComponentConfig, CorpusConfig, LocalSourceConfig
-from kestrel.data.pretrain_dataset import PretrainDataset, PretrainDatasetConfig
+from kestrel.data.pretrain_dataset import (
+    PretrainDataset,
+    PretrainDatasetConfig,
+    PretrainDatasetIterator,
+)
 from kestrel.model.config import ModelConfig
 from kestrel.tokenizer.config import TokenizerConfig
 from kestrel.tokenizer.train import train as train_tokenizer
+from kestrel.train import pretrain as pretrain_module
+from kestrel.train.checkpoint import read_checkpoint_state
 from kestrel.train.pretrain import PretrainConfig, pretrain
-from kestrel.train.trainer import TrainerConfig
+from kestrel.train.trainer import TrainerConfig, TrainResult
 
 BASE = "the quick brown fox jumps over the lazy dog. "
 
@@ -200,3 +211,142 @@ def test_12g_50m_estimated_steps_uses_token_cap() -> None:
     )
     expected = 1013504000 // (8 * 1024)
     assert abs(dataset.estimated_steps() - expected) / expected < 0.05
+
+
+# --- resume ---
+
+
+def test_pretrain_resume_from_completed_final_is_noop(tmp_path: Path) -> None:
+    tok = _tiny_tokenizer(tmp_path)
+    config = _tiny_pretrain_config(tmp_path, tok, num_steps=5)
+    first = pretrain(config)
+    assert first.num_steps == 5
+
+    config.resume = str(tmp_path / "ckpt" / "final")
+    second = pretrain(config)
+
+    assert second.num_steps == 5
+    state = read_checkpoint_state(tmp_path / "ckpt" / "final")
+    assert state["step"] == 5
+
+
+def test_pretrain_resume_rejects_incompatible_trainer_config(tmp_path: Path) -> None:
+    tok = _tiny_tokenizer(tmp_path)
+    config = _tiny_pretrain_config(tmp_path, tok, num_steps=5)
+    pretrain(config)
+
+    config.resume = str(tmp_path / "ckpt" / "final")
+    config.trainer.batch_size = 4
+    with pytest.raises(ValueError, match="trainer config"):
+        pretrain(config)
+
+
+class _CrashAfterIterator:
+    def __init__(self, inner: PretrainDatasetIterator, crash_after: int) -> None:
+        self._inner = inner
+        self._crash_after = crash_after
+        self._count = 0
+
+    def __iter__(self) -> _CrashAfterIterator:
+        return self
+
+    def __next__(self) -> tuple[Any, Any, Any]:
+        batch = next(self._inner)
+        self._count += 1
+        if self._count >= self._crash_after:
+            msg = "simulated crash"
+            raise RuntimeError(msg)
+        return batch
+
+    def state_dict(self) -> dict[str, Any]:
+        return self._inner.state_dict()
+
+    def close(self) -> None:
+        self._inner.close()
+
+
+class _CrashAfterPretrainDataset:
+    def __init__(self, inner: PretrainDataset, crash_after: int) -> None:
+        self._inner = inner
+        self._crash_after = crash_after
+
+    def estimated_steps(self) -> int:
+        return self._inner.estimated_steps()
+
+    def iterator(self) -> _CrashAfterIterator:
+        return _CrashAfterIterator(self._inner.iterator(), self._crash_after)
+
+    def load_iterator(self, state: dict[str, Any]) -> PretrainDatasetIterator:
+        return self._inner.load_iterator(state)
+
+
+def test_pretrain_resume_continues_after_simulated_crash(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    tok = _tiny_tokenizer(tmp_path)
+    config = _tiny_pretrain_config(tmp_path, tok, num_steps=10)
+    config.trainer.save_every = 5
+
+    real_dataset = pretrain_module._dataset
+
+    def fake_dataset(
+        cfg: PretrainConfig, corpus_cfg: CorpusConfig, split: str, total_tokens: int | None
+    ) -> PretrainDataset:
+        dataset = real_dataset(cfg, corpus_cfg, split, total_tokens)
+        if split == "train":
+            # Return five batches, then crash on the sixth ``next()`` call so
+            # the step-5 checkpoint has already been written.
+            return cast(PretrainDataset, _CrashAfterPretrainDataset(dataset, 6))
+        return dataset
+
+    monkeypatch.setattr(pretrain_module, "_dataset", fake_dataset)
+    with pytest.raises(RuntimeError, match="simulated crash"):
+        pretrain(config)
+
+    checkpoint_dir = tmp_path / "ckpt" / "step_000005"
+    assert checkpoint_dir.is_dir()
+    state = read_checkpoint_state(checkpoint_dir)
+    assert state["step"] == 5
+
+    config.resume = str(checkpoint_dir)
+    result = pretrain(config)
+
+    assert result.num_steps == 10
+    assert len(result.history) == 5
+    final_state = read_checkpoint_state(tmp_path / "ckpt" / "final")
+    assert final_state["step"] == 10
+
+
+def test_run_pretrain_cli_resume_overrides_config(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    spec = importlib.util.spec_from_file_location("kestrel_run_pretrain", "scripts/run_pretrain.py")
+    assert spec is not None and spec.loader is not None
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+
+    calls: dict[str, Any] = {}
+
+    def fake_pretrain(config: PretrainConfig, config_path: str | Path | None = None) -> TrainResult:
+        calls["config"] = config
+        calls["config_path"] = config_path
+        return TrainResult(final_loss=1.0, num_steps=1)
+
+    monkeypatch.setattr(module, "pretrain", fake_pretrain)
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        [
+            "run_pretrain.py",
+            "--config",
+            "configs/kestrel/50m/pretrain.yaml",
+            "--resume",
+            "checkpoints/pretrain/50m/step_000010",
+        ],
+    )
+
+    module.main()
+
+    assert calls["config"].resume == "checkpoints/pretrain/50m/step_000010"
+    assert calls["config_path"] == "configs/kestrel/50m/pretrain.yaml"
+    assert "steps:       1" in capsys.readouterr().out

@@ -17,6 +17,7 @@ from tokenizers import Tokenizer
 from kestrel.data.pretrain_dataset import (
     PretrainDataset,
     PretrainDatasetConfig,
+    PretrainDatasetIterator,
     _resolve_sources,
     choose_deficit_source,
 )
@@ -469,3 +470,102 @@ def test_shuffled_directory_input_respects_total_tokens(
     dataset = PretrainDataset(_config(d, tok, batch_size=1, context_length=8, total_tokens=8))
 
     assert len(list(dataset)) == 1
+
+
+# --- resumable iterator state ---
+
+
+def _batch_key(batch: tuple[mx.array, mx.array, mx.array]) -> tuple[list[int], ...]:
+    return tuple(array.tolist() for array in batch)
+
+
+def _assert_same_remaining_batches(
+    first: PretrainDatasetIterator, second: PretrainDatasetIterator
+) -> None:
+    while True:
+        try:
+            first_batch = next(first)
+        except StopIteration:
+            break
+        second_batch = next(second)
+        assert _batch_key(first_batch) == _batch_key(second_batch)
+    with pytest.raises(StopIteration):
+        next(second)
+
+
+def test_dataset_iterator_state_round_trip_single_file(
+    tmp_path: Path, tiny_tokenizer: Path
+) -> None:
+    tok = tiny_tokenizer
+    data = tmp_path / "data.jsonl"
+    _write_jsonl(data, [SENTENCE * 5] * 5)
+    dataset = PretrainDataset(_config(data, tok, batch_size=1, context_length=8))
+
+    iterator = dataset.iterator()
+    for _ in range(3):
+        next(iterator)
+    state = iterator.state_dict()
+    json.dumps(state)
+
+    restored = dataset.load_iterator(state)
+    for _ in range(5):
+        first_batch = next(iterator)
+        second_batch = next(restored)
+        assert _batch_key(first_batch) == _batch_key(second_batch)
+    _assert_same_remaining_batches(iterator, restored)
+
+
+def test_dataset_iterator_state_round_trip_multi_file(tmp_path: Path, tiny_tokenizer: Path) -> None:
+    tok = tiny_tokenizer
+    d = tmp_path / "data"
+    d.mkdir()
+    _write_jsonl(d / "a.jsonl", ["alpha " * 50])
+    _write_jsonl(d / "b.jsonl", ["beta " * 50])
+    dataset = PretrainDataset(_config(d, tok, batch_size=1, context_length=8))
+
+    iterator = dataset.iterator()
+    for _ in range(4):
+        next(iterator)
+    state = iterator.state_dict()
+    payload = json.dumps(state)
+    assert '"offsets"' not in payload
+
+    restored = dataset.load_iterator(state)
+    for _ in range(10):
+        first_batch = next(iterator)
+        second_batch = next(restored)
+        assert _batch_key(first_batch) == _batch_key(second_batch)
+    _assert_same_remaining_batches(iterator, restored)
+
+
+def test_dataset_iterator_state_round_trip_after_total_tokens_cap(
+    tmp_path: Path, tiny_tokenizer: Path
+) -> None:
+    tok = tiny_tokenizer
+    data = tmp_path / "data.jsonl"
+    _write_jsonl(data, [SENTENCE * 20])
+    dataset = PretrainDataset(_config(data, tok, batch_size=1, context_length=8, total_tokens=8))
+
+    iterator = dataset.iterator()
+    next(iterator)
+    state = iterator.state_dict()
+
+    restored = dataset.load_iterator(state)
+    with pytest.raises(StopIteration):
+        next(restored)
+
+
+def test_dataset_iterator_rejects_state_from_different_config(
+    tmp_path: Path, tiny_tokenizer: Path
+) -> None:
+    tok = tiny_tokenizer
+    data = tmp_path / "data.jsonl"
+    _write_jsonl(data, [SENTENCE * 5] * 5)
+    dataset = PretrainDataset(_config(data, tok, batch_size=1, context_length=8))
+    iterator = dataset.iterator()
+    next(iterator)
+    state = iterator.state_dict()
+
+    other_dataset = PretrainDataset(_config(data, tok, batch_size=1, context_length=16))
+    with pytest.raises(ValueError, match="different PretrainDatasetConfig"):
+        other_dataset.load_iterator(state)

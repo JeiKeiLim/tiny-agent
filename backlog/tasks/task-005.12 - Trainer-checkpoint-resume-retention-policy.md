@@ -1,10 +1,10 @@
 ---
 id: TASK-005.12
 title: Trainer checkpoint resume + retention policy
-status: To Do
+status: In Progress
 assignee: []
 created_date: '2026-08-26 04:13'
-updated_date: '2026-08-26 04:14'
+updated_date: '2026-08-26 04:43'
 labels:
   - training
   - checkpoint

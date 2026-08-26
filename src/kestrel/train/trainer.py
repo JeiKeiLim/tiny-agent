@@ -18,8 +18,12 @@ params, no learning). At our scale (50M) compile buys nothing, so eager is used.
 
 from __future__ import annotations
 
+import json
 import math
+import re
+import shutil
 from collections.abc import Iterable
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, cast
 
@@ -31,7 +35,7 @@ from mlx.utils import tree_flatten, tree_map
 from pydantic import Field
 
 from kestrel.common.config import BaseConfig
-from kestrel.model.io import save as save_checkpoint
+from kestrel.train.checkpoint import CheckpointContext, save_full_checkpoint
 
 
 class TrainerConfig(BaseConfig):
@@ -50,6 +54,8 @@ class TrainerConfig(BaseConfig):
     eval_every: int = 100
     eval_iters: int = 5
     output_dir: str = "checkpoints/train"
+    keep_latest_checkpoints: int | None = Field(default=3, ge=1)
+    keep_best_checkpoint: bool = True
 
 
 class TrainResult(BaseConfig):
@@ -64,6 +70,20 @@ class TrainResult(BaseConfig):
     best_val_loss: float | None = None
     schedule_steps: int | None = None
     history: list[tuple[int, float, float | None]] = Field(default_factory=list)
+
+
+@dataclass
+class ResumeState:
+    """Training state restored from a full checkpoint before continuing."""
+
+    step: int
+    schedule_steps: int
+    best_val_loss: float | None
+    last_train_loss: float | None
+    last_val_loss: float | None
+    last_eval_step: int | None
+    optimizer: optim.Optimizer
+    checkpoint_dir: Path | None = None
 
 
 def lr_at(step: int, cfg: TrainerConfig, schedule_steps: int | None = None) -> float:
@@ -122,81 +142,253 @@ def estimate_val_loss(model: nn.Module, val: Iterable[tuple[mx.array, ...]], ite
     return total / n if n else float("inf")
 
 
+_STEP_CHECKPOINT_RE = re.compile(r"^step_(\d+)$")
+
+
+def _prune_step_checkpoints(output_dir: Path, keep_latest: int | None) -> None:
+    """Delete old ``step_NNNNNN`` checkpoint directories, keeping the newest ones.
+
+    Only immediate subdirectories matching ``step_<digits>`` are eligible.
+    ``best``, ``final``, and unrecognized paths are never touched. Recency is
+    determined by directory mtime with the step number as a tie-breaker, so a
+    reused output directory containing stale high-step checkpoints does not
+    cause fresh low-step checkpoints from a new run to be deleted.
+    """
+    if keep_latest is None or not output_dir.is_dir():
+        return
+    candidates: list[tuple[float, int, Path]] = []
+    for path in output_dir.iterdir():
+        if not path.is_dir():
+            continue
+        match = _STEP_CHECKPOINT_RE.fullmatch(path.name)
+        if match is None:
+            continue
+        candidates.append((path.stat().st_mtime, int(match.group(1)), path))
+    candidates.sort(key=lambda item: (item[0], item[1]))
+    for _, _, path in candidates[:-keep_latest]:
+        shutil.rmtree(path)
+
+
+def _dataset_state(dataset: Any) -> dict[str, Any] | None:
+    """Return checkpointable dataset state when the iterator exposes it."""
+    state_dict = getattr(dataset, "state_dict", None)
+    if callable(state_dict):
+        return cast(dict[str, Any], state_dict())
+    return None
+
+
+def _save_checkpoint(
+    model: nn.Module,
+    optimizer: optim.Optimizer,
+    path: Path,
+    config: TrainerConfig,
+    *,
+    step: int,
+    best_val_loss: float | None,
+    last_train_loss: float | None,
+    last_val_loss: float | None,
+    last_eval_step: int | None,
+    horizon: int,
+    dataset: Any,
+    context: CheckpointContext | None,
+    run_log_path: Path,
+) -> None:
+    state = {
+        "kind": path.name,
+        "step": step,
+        "best_val_loss": best_val_loss,
+        "last_train_loss": last_train_loss,
+        "last_val_loss": last_val_loss,
+        "last_eval_step": last_eval_step,
+        "schedule_steps": horizon,
+        "batch_size": config.batch_size,
+        "seq_len": config.seq_len,
+        "optimizer": {
+            "learning_rate": config.lr,
+            "weight_decay": config.weight_decay,
+            "betas": list(config.betas),
+        },
+        "dataset_state": _dataset_state(dataset),
+    }
+    save_full_checkpoint(
+        model,
+        optimizer,
+        path,
+        state,
+        context=context,
+        run_log_path=run_log_path,
+    )
+
+
 def train(
     model: nn.Module,
     dataset: Iterable[tuple[mx.array, ...]],
     val_dataset: Iterable[tuple[mx.array, ...]],
     config: TrainerConfig,
     schedule_steps: int | None = None,
+    *,
+    resume: ResumeState | None = None,
+    checkpoint_context: CheckpointContext | None = None,
 ) -> TrainResult:
     """Run the training loop and return a :class:`TrainResult`.
 
     Checkpoints are written to ``config.output_dir`` every ``save_every`` steps
-    (``step_<n>``) and a ``final`` checkpoint at the end.
+    (``step_<n>``) and a ``final`` checkpoint at the end. A ``best`` checkpoint
+    is written whenever validation loss strictly improves, and old step
+    checkpoints are pruned according to ``keep_latest_checkpoints``.
 
     ``config.num_steps > 0`` is a hard stop cap. ``config.num_steps <= 0`` runs
     until the dataset is exhausted; ``schedule_steps`` (or the dataset's
     ``estimated_steps()`` when available) sets the LR decay horizon.
     """
     auto_steps = config.num_steps <= 0
-    if auto_steps and schedule_steps is None:
-        estimated = getattr(dataset, "estimated_steps", None)
-        if callable(estimated):
-            schedule_steps = cast(int, estimated())
-    if schedule_steps is None or schedule_steps <= 0:
-        schedule_steps = config.num_steps
-    horizon = max(1, schedule_steps)
-    if auto_steps:
-        print(f"num_steps <= 0: running until dataset exhaustion with schedule_steps={horizon}")
-
-    opt = optim.AdamW(
-        learning_rate=config.lr, betas=list(config.betas), weight_decay=config.weight_decay
-    )
     history: list[tuple[int, float, float | None]] = []
-    best_val: float | None = None
+    opt: optim.Optimizer
+
+    if resume is None:
+        if auto_steps and schedule_steps is None:
+            estimated = getattr(dataset, "estimated_steps", None)
+            if callable(estimated):
+                schedule_steps = cast(int, estimated())
+        if schedule_steps is None or schedule_steps <= 0:
+            schedule_steps = config.num_steps
+        horizon = max(1, schedule_steps)
+        if auto_steps:
+            print(f"num_steps <= 0: running until dataset exhaustion with schedule_steps={horizon}")
+
+        opt = optim.AdamW(
+            learning_rate=config.lr, betas=list(config.betas), weight_decay=config.weight_decay
+        )
+        step = 0
+        best_val: float | None = None
+        last_train: float | None = None
+        last_val: float | None = None
+        last_eval_step: int | None = None
+    else:
+        horizon = max(1, resume.schedule_steps)
+        opt = resume.optimizer
+        step = resume.step
+        best_val = resume.best_val_loss
+        last_train = resume.last_train_loss
+        last_val = resume.last_val_loss
+        last_eval_step = resume.last_eval_step
+
+    output_dir = Path(config.output_dir)
+    output_dir.mkdir(parents=True, exist_ok=True)
+    run_log_path = output_dir / "run.jsonl"
     steps_label = str(config.num_steps) if not auto_steps else str(horizon)
-    step = 0
-    for batch in dataset:
-        x, target, doc_ids = _unpack_batch(batch)
-        opt.learning_rate = lr_at(step, config, horizon)
+    train_iter = iter(dataset)
 
-        def loss_fn(
-            m: nn.Module,
-            _x: mx.array = x,
-            _t: mx.array = target,
-            _d: mx.array | None = doc_ids,
-        ) -> mx.array:
-            return _batch_loss(m, _x, _t, _d)
+    with run_log_path.open("a", encoding="utf-8") as run_log:
+        while True:
+            if config.num_steps > 0 and step >= config.num_steps:
+                break
+            try:
+                batch = next(train_iter)
+            except StopIteration:
+                break
 
-        value, grad = mx.value_and_grad(loss_fn)(model)
-        opt.update(model, _clip_grads(grad, config.grad_clip))
-        mx.eval(model.parameters())
-        loss = cast(float, value.item())
+            x, target, doc_ids = _unpack_batch(batch)
+            opt.learning_rate = lr_at(step, config, horizon)
 
-        val_loss: float | None = None
-        if config.eval_every > 0 and (step + 1) % config.eval_every == 0:
-            val_loss = estimate_val_loss(model, val_dataset, config.eval_iters)
-            if best_val is None or val_loss < best_val:
-                best_val = val_loss
-        if config.log_every > 0 and (step + 1) % config.log_every == 0:
-            msg = f"step {step + 1}/{steps_label} loss {loss:.4f} lr {opt.learning_rate:.2e}"
+            def loss_fn(
+                m: nn.Module,
+                _x: mx.array = x,
+                _t: mx.array = target,
+                _d: mx.array | None = doc_ids,
+            ) -> mx.array:
+                return _batch_loss(m, _x, _t, _d)
+
+            value, grad = mx.value_and_grad(loss_fn)(model)
+            opt.update(model, _clip_grads(grad, config.grad_clip))
+            mx.eval(model.parameters())
+            loss = cast(float, value.item())
+
+            val_loss: float | None = None
+            if config.eval_every > 0 and (step + 1) % config.eval_every == 0:
+                val_loss = estimate_val_loss(model, val_dataset, config.eval_iters)
+                if math.isfinite(val_loss) and (best_val is None or val_loss < best_val):
+                    best_val = val_loss
+                    if config.keep_best_checkpoint:
+                        _save_checkpoint(
+                            model,
+                            opt,
+                            output_dir / "best",
+                            config,
+                            step=step + 1,
+                            best_val_loss=best_val,
+                            last_train_loss=loss,
+                            last_val_loss=val_loss,
+                            last_eval_step=step + 1,
+                            horizon=horizon,
+                            dataset=train_iter,
+                            context=checkpoint_context,
+                            run_log_path=run_log_path,
+                        )
+            if config.log_every > 0 and (step + 1) % config.log_every == 0:
+                msg = f"step {step + 1}/{steps_label} loss {loss:.4f} lr {opt.learning_rate:.2e}"
+                if val_loss is not None:
+                    msg += f" val {val_loss:.4f}"
+                print(msg)
+            if config.save_every > 0 and (step + 1) % config.save_every == 0:
+                _save_checkpoint(
+                    model,
+                    opt,
+                    output_dir / f"step_{step + 1:06d}",
+                    config,
+                    step=step + 1,
+                    best_val_loss=best_val,
+                    last_train_loss=loss,
+                    last_val_loss=val_loss,
+                    last_eval_step=step + 1 if val_loss is not None else last_eval_step,
+                    horizon=horizon,
+                    dataset=train_iter,
+                    context=checkpoint_context,
+                    run_log_path=run_log_path,
+                )
+                _prune_step_checkpoints(output_dir, config.keep_latest_checkpoints)
+
+            entry: dict[str, float | int] = {
+                "step": step + 1,
+                "train_loss": loss,
+                "lr": float(opt.learning_rate),
+            }
             if val_loss is not None:
-                msg += f" val {val_loss:.4f}"
-            print(msg)
-        if config.save_every > 0 and (step + 1) % config.save_every == 0:
-            save_checkpoint(model, Path(config.output_dir) / f"step_{step + 1:06d}")
+                entry["val_loss"] = val_loss
+            run_log.write(json.dumps(entry) + "\n")
+            run_log.flush()
 
-        history.append((step + 1, loss, val_loss))
-        step += 1
-        if not auto_steps and step >= config.num_steps:
-            break
+            history.append((step + 1, loss, val_loss))
+            last_train = loss
+            last_val = val_loss
+            if val_loss is not None:
+                last_eval_step = step + 1
+            step += 1
 
-    save_checkpoint(model, Path(config.output_dir) / "final")
-    final_loss = history[-1][1] if history else float("inf")
+        _save_checkpoint(
+            model,
+            opt,
+            output_dir / "final",
+            config,
+            step=step,
+            best_val_loss=best_val,
+            last_train_loss=last_train,
+            last_val_loss=last_val,
+            last_eval_step=last_eval_step,
+            horizon=horizon,
+            dataset=train_iter,
+            context=checkpoint_context,
+            run_log_path=run_log_path,
+        )
+
+    if history:
+        final_loss = history[-1][1]
+    else:
+        final_loss = last_train if last_train is not None else float("inf")
     return TrainResult(
         final_loss=final_loss,
         num_steps=step,
         best_val_loss=best_val,
-        schedule_steps=horizon if auto_steps else None,
+        schedule_steps=horizon if (auto_steps or resume is not None) else None,
         history=history,
     )

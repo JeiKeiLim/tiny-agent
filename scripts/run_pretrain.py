@@ -20,10 +20,17 @@ DEFAULT_CONFIG = "configs/kestrel/50m/pretrain.yaml"
 def main() -> None:
     parser = argparse.ArgumentParser(description="Run Kestrel pretraining.")
     parser.add_argument("--config", default=DEFAULT_CONFIG, help="pretrain config YAML")
+    parser.add_argument(
+        "--resume",
+        default=None,
+        help="full checkpoint directory to resume from (step_NNNNNN, best, or final)",
+    )
     args = parser.parse_args()
 
     config = load_config(args.config, PretrainConfig)
-    result = pretrain(config)
+    if args.resume is not None:
+        config.resume = args.resume
+    result = pretrain(config, config_path=args.config)
     print(f"final loss:  {result.final_loss:.4f}")
     print(f"steps:       {result.num_steps}")
     if result.best_val_loss is not None:
