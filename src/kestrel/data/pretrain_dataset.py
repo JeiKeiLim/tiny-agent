@@ -22,7 +22,7 @@ import json
 import math
 import random
 from collections.abc import Generator, Iterator, Sequence
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from pathlib import Path
 
 import mlx.core as mx
@@ -56,7 +56,6 @@ class _Source:
     target_fraction: float
     estimated_tokens: int
     total_docs: int
-    iterator: Generator[str] | None = field(default=None, repr=False)
 
 
 @dataclass
@@ -283,15 +282,18 @@ class PretrainDataset:
         batch_doc: list[list[int]] = []
         emitted_total = 0
         next_doc_id = 0
+        iterators: list[Generator[str] | None] = [None] * len(sources)
 
         try:
             while active:
                 index = choose_deficit_source(active, fractions, emitted, rng)
                 source = sources[index]
-                if source.iterator is None:
-                    source.iterator = _iter_documents(source.path)
+                iterator = iterators[index]
+                if iterator is None:
+                    iterator = _iter_documents(source.path)
+                    iterators[index] = iterator
                 try:
-                    text = next(source.iterator)
+                    text = next(iterator)
                 except StopIteration:
                     active.remove(index)
                     continue
@@ -324,6 +326,6 @@ class PretrainDataset:
                     if cap is not None and emitted_total >= cap:
                         return
         finally:
-            for source in sources:
-                if source.iterator is not None:
-                    source.iterator.close()
+            for iterator in iterators:
+                if iterator is not None:
+                    iterator.close()

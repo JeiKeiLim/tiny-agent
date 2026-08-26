@@ -360,3 +360,39 @@ def test_estimated_steps_uses_total_tokens_cap(tmp_path: Path, tiny_tokenizer: P
 
     dataset = PretrainDataset(_config(d, tok, batch_size=2, context_length=8, total_tokens=100))
     assert dataset.estimated_steps() == 100 // (2 * 8)
+
+
+def test_repeated_iteration_single_file_after_early_stop(
+    tmp_path: Path, tiny_tokenizer: Path
+) -> None:
+    tok = tiny_tokenizer
+    data = tmp_path / "data.jsonl"
+    _write_jsonl(data, [SENTENCE * 5] * 5)
+    dataset = PretrainDataset(_config(data, tok, batch_size=1, context_length=8))
+
+    first_iter = iter(dataset)
+    first_batch = next(first_iter)
+    first_iter.close()
+
+    second_batch = next(iter(dataset))
+    assert second_batch[0].shape == (1, 8)
+    assert second_batch[0].tolist() == first_batch[0].tolist()
+
+
+def test_repeated_iteration_multi_file_after_early_stop(
+    tmp_path: Path, tiny_tokenizer: Path
+) -> None:
+    tok = tiny_tokenizer
+    d = tmp_path / "data"
+    d.mkdir()
+    _write_jsonl(d / "a.jsonl", ["alpha " * 50])
+    _write_jsonl(d / "b.jsonl", ["beta " * 50])
+    dataset = PretrainDataset(_config(d, tok, batch_size=1, context_length=8))
+
+    first_iter = iter(dataset)
+    first_batch = next(first_iter)
+    first_iter.close()
+
+    second_batch = next(iter(dataset))
+    assert second_batch[0].shape == (1, 8)
+    assert second_batch[0].tolist() == first_batch[0].tolist()
