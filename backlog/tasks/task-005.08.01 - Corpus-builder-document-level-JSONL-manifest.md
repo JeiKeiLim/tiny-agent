@@ -1,10 +1,11 @@
 ---
 id: TASK-005.08.01
 title: 'Corpus builder: document-level JSONL + manifest'
-status: To Do
-assignee: []
+status: Done
+assignee:
+  - '@opencode'
 created_date: '2026-08-26 00:24'
-updated_date: '2026-08-26 00:25'
+updated_date: '2026-08-26 00:39'
 labels:
   - data
   - corpus
@@ -69,8 +70,31 @@ Reference: doc-003.
 
 ## Acceptance Criteria
 <!-- AC:BEGIN -->
-- [ ] #1 Multi-line code document remains one physical JSONL row and round-trips to identical text
-- [ ] #2 Multi-line web document remains one physical JSONL row and round-trips to identical text
-- [ ] #3 Manifest doc_count equals the number of JSONL rows
-- [ ] #4 make check is green
+- [x] #1 Multi-line code document remains one physical JSONL row and round-trips to identical text
+- [x] #2 Multi-line web document remains one physical JSONL row and round-trips to identical text
+- [x] #3 Manifest doc_count equals the number of JSONL rows
+- [x] #4 make check is green
+- [x] #5 Small real HF build preserves multiline documents and writes manifest
 <!-- AC:END -->
+
+## Implementation Plan
+
+<!-- SECTION:PLAN:BEGIN -->
+1. Add output_format and tokenizer_path to CorpusConfig. 2. Change builder to emit one JSON document per line for HF/local JSONL/local txt. 3. Route splits by full document text. 4. Accumulate per-split/per-domain stats and write manifest.json. 5. Update tests for JSONL, internal newlines, manifest counts, and legacy txt behavior. 6. Run make check.
+<!-- SECTION:PLAN:END -->
+
+## Implementation Notes
+
+<!-- SECTION:NOTES:BEGIN -->
+Implemented document-level JSONL corpus builder. Added CorpusConfig.output_format (default jsonl) and optional tokenizer_path. Builder writes one JSON document per physical line, supports local .jsonl and legacy .txt, splits by full document text, and writes per-split manifest.json with doc_count, byte_count, target_fraction, and estimated or exact token counts. tests/test_pretrain.py temporarily uses output_format=txt until TASK-005.08.02 updates PretrainDataset. make check green: 89 tests.
+
+Reopened: unit tests and make check are not sufficient for this task. Need a real small HF corpus build smoke test before marking Done.
+
+Real HF smoke build completed to /var/folders/11/jmxpptjn50s_v9k5k1qw30z40000gn/T/opencode/corpus-smoke with total_bytes=500000. Results: web 428696 bytes, code 60036 bytes, jsonl 27222 bytes. Train manifest total_doc_count=105, val=12. Web and code JSONL docs preserve internal newlines; jsonl docs are single-line serialized rows. make check remained green (89 tests).
+<!-- SECTION:NOTES:END -->
+
+## Final Summary
+
+<!-- SECTION:FINAL_SUMMARY:BEGIN -->
+Corpus builder emits document-level JSONL plus manifest.json. Verified with unit tests, make check (89 tests), and a small real HF build that preserved multiline web/code documents.
+<!-- SECTION:FINAL_SUMMARY:END -->

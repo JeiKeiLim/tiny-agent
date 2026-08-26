@@ -77,5 +77,6 @@ def pretrain(config: PretrainConfig) -> TrainResult:
 
     train_ds = _dataset(config, corpus_cfg, "train", config.total_tokens)
     val_ds = _dataset(config, corpus_cfg, "val", None)
+    schedule_steps = train_ds.estimated_steps() if config.trainer.num_steps <= 0 else None
 
-    return train(model, train_ds, val_ds, config.trainer)
+    return train(model, train_ds, val_ds, config.trainer, schedule_steps=schedule_steps)

@@ -57,7 +57,7 @@ def _write_yaml(path: Path, obj: object) -> None:
     path.write_text(yaml.safe_dump(obj), encoding="utf-8")
 
 
-def _tiny_pretrain_config(tmp_path: Path, tok: Path) -> PretrainConfig:
+def _tiny_pretrain_config(tmp_path: Path, tok: Path, num_steps: int = 30) -> PretrainConfig:
     model_yaml = tmp_path / "model.yaml"
     _write_yaml(model_yaml, _tiny_model_config().model_dump())
 
@@ -92,7 +92,7 @@ def _tiny_pretrain_config(tmp_path: Path, tok: Path) -> PretrainConfig:
             lr=1e-3,
             seq_len=16,
             batch_size=2,
-            num_steps=30,
+            num_steps=num_steps,
             warmup_steps=5,
             eval_every=10,
             eval_iters=2,
@@ -114,6 +114,16 @@ def test_pretrain_end_to_end(tmp_path: Path) -> None:
     assert (tmp_path / "ckpt" / "final" / "weights.npz").exists()
 
 
+def test_pretrain_auto_num_steps_uses_estimated_steps(tmp_path: Path) -> None:
+    tok = _tiny_tokenizer(tmp_path)
+    config = _tiny_pretrain_config(tmp_path, tok, num_steps=0)
+    result = pretrain(config)
+    assert result.num_steps == 32
+    assert result.schedule_steps == 32
+    assert math.isfinite(result.final_loss)
+    assert (tmp_path / "ckpt" / "final" / "weights.npz").exists()
+
+
 def test_pretrain_config_strict() -> None:
     PretrainConfig(model="m.yaml", tokenizer="t.json", corpus="c.yaml")  # valid
     with pytest.raises(ValidationError):
@@ -127,4 +137,5 @@ def test_pretrain_config_strict() -> None:
 def test_50m_pretrain_yaml_loads() -> None:
     config = load_config("configs/kestrel/50m/pretrain.yaml", PretrainConfig)
     assert config.trainer.seq_len == 1024
+    assert config.trainer.num_steps == 0
     assert config.total_tokens is None  # single pass

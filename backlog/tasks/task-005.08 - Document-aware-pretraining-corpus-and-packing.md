@@ -1,10 +1,11 @@
 ---
 id: TASK-005.08
 title: Document-aware pretraining corpus and packing
-status: To Do
-assignee: []
+status: Done
+assignee:
+  - '@opencode'
 created_date: '2026-08-26 00:24'
-updated_date: '2026-08-26 00:27'
+updated_date: '2026-08-26 00:55'
 labels:
   - data
   - pretraining
@@ -35,9 +36,21 @@ Reference: doc-003.
 
 ## Acceptance Criteria
 <!-- AC:BEGIN -->
-- [ ] #1 TASK-005.08.01 is Done
-- [ ] #2 TASK-005.08.02 is Done
-- [ ] #3 TASK-005.08.03 is Done
-- [ ] #4 data/corpus contains document-level JSONL plus manifest.json
-- [ ] #5 make check is green
+- [x] #1 TASK-005.08.01 is Done
+- [x] #2 TASK-005.08.02 is Done
+- [x] #3 TASK-005.08.03 is Done
+- [x] #4 data/corpus contains document-level JSONL plus manifest.json
+- [x] #5 make check is green
 <!-- AC:END -->
+
+## Implementation Notes
+
+<!-- SECTION:NOTES:BEGIN -->
+Regenerated data/corpus from HF sources with document-level JSONL + manifest. Build results: web 912697307 bytes, code 107383862 bytes, jsonl 52075371 bytes. Train: 225716 docs, 963284380 bytes, estimated 240821095 tokens. Val: 25102 docs, 108872160 bytes, estimated 27218040 tokens. Web/code samples preserve internal newlines. make check green: 101 tests.
+<!-- SECTION:NOTES:END -->
+
+## Final Summary
+
+<!-- SECTION:FINAL_SUMMARY:BEGIN -->
+Document-aware pretraining pipeline is complete: corpus builder emits JSONL + manifest, PretrainDataset emits doc_ids with token-aware mixing, model/trainer use same-document attention and position resets, and pretrain configs use auto dataset-exhaustion step horizons. The real data/corpus was regenerated from HF sources.
+<!-- SECTION:FINAL_SUMMARY:END -->

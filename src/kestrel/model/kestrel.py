@@ -4,7 +4,12 @@ A small GPT-style model: pre-norm RMSNorm, rotary position embeddings (RoPE),
 SwiGLU feed-forward, causal grouped-query attention (GQA) via
 ``mx.fast.scaled_dot_product_attention``, and tied input/output embeddings.
 No biases, dropout 0. ``Kestrel.__call__`` returns logits of shape
-``(B, T, vocab_size)``; the cross-entropy loss is computed by the caller.
+ ``(B, T, vocab_size)``; the cross-entropy loss is computed by the caller.
+
+When ``doc_ids`` of shape ``(B, T)`` is provided, attention is restricted to
+tokens with the same document id, and RoPE positions reset to 0 at every
+document boundary. Without ``doc_ids``, the model uses ordinary causal
+attention.
 """
 
 from __future__ import annotations
@@ -16,11 +21,38 @@ from mlx.utils import tree_flatten
 from kestrel.model.config import ModelConfig
 
 
+def _freqs_cis_at(dim: int, positions: mx.array, theta: float) -> tuple[mx.array, mx.array]:
+    """Rotary tables at explicit positions.
+
+    For ``positions`` of shape ``(T,)`` the tables have shape ``(T, dim//2)``.
+    For ``positions`` of shape ``(B, T)`` the tables have shape
+    ``(B, 1, T, dim//2)`` so they broadcast over attention heads.
+    """
+    freqs = 1.0 / (theta ** (mx.arange(0, dim, 2) / dim))
+    angles = positions[..., None] * freqs
+    cos = mx.cos(angles)
+    sin = mx.sin(angles)
+    if cos.ndim == 3:
+        cos = cos[:, None, :, :]
+        sin = sin[:, None, :, :]
+    return cos, sin
+
+
 def precompute_freqs_cis(dim: int, end: int, theta: float = 10000.0) -> tuple[mx.array, mx.array]:
     """Rotary (cos, sin) tables for positions ``0..end-1``, each of shape (end, dim//2)."""
-    freqs = 1.0 / (theta ** (mx.arange(0, dim, 2) / dim))
-    angles = mx.outer(mx.arange(0, end), freqs)
-    return mx.cos(angles), mx.sin(angles)
+    return _freqs_cis_at(dim, mx.arange(end), theta)
+
+
+def document_positions(doc_ids: mx.array) -> mx.array:
+    """Per-position offsets inside each document for ``doc_ids`` of shape ``(B, T)``."""
+    B, T = doc_ids.shape
+    first = mx.ones((B, 1), dtype=mx.bool_)
+    changed = mx.not_equal(doc_ids[:, 1:], doc_ids[:, :-1])
+    starts = mx.concatenate([first, changed], axis=1)
+    arange = mx.arange(T)[None, :]
+    start_idx = mx.where(starts, arange, mx.zeros((B, T), dtype=mx.int32))
+    last_start = mx.cummax(start_idx, axis=1)
+    return arange - last_start
 
 
 def apply_rotary_emb(
@@ -36,6 +68,24 @@ def apply_rotary_emb(
     return _apply(xq), _apply(xk)
 
 
+def _causal_mask(query_start: int, query_end: int, key_len: int) -> mx.array:
+    query_pos = mx.arange(query_start, query_end)[:, None]
+    key_pos = mx.arange(key_len)[None, :]
+    return (key_pos <= query_pos)[None, None, :, :]
+
+
+def _document_mask(doc_ids: mx.array, query_start: int, query_end: int, key_len: int) -> mx.array:
+    """Boolean attention mask for causal, same-document attention.
+
+    The mask is true only when ``key_pos <= query_pos`` and the key/query tokens
+    share the same document id. Shape is ``(B, 1, T_q, T_k)``.
+    """
+    query_doc = doc_ids[:, query_start:query_end][:, None, :, None]
+    key_doc = doc_ids[:, :key_len][:, None, None, :]
+    same_doc = query_doc == key_doc
+    return _causal_mask(query_start, query_end, key_len) & same_doc
+
+
 def causal_sdpa(
     q: mx.array,
     k: mx.array,
@@ -43,28 +93,30 @@ def causal_sdpa(
     *,
     scale: float,
     chunk_size: int = 1024,
+    doc_ids: mx.array | None = None,
 ) -> mx.array:
-    """Causal GQA scaled-dot-product attention.
+    """Causal or document-aware GQA scaled-dot-product attention.
 
-    Uses the fused causal path when the query sequence fits in one chunk.
-    Otherwise processes query chunks against the full key/value sequence. The
-    final chunk can use MLX's lower-right-aligned ``"causal"`` mask; earlier
-    chunks need an explicit boolean mask.
+    Uses the fused causal path when ``doc_ids`` is None and the query sequence
+    fits in one chunk. Otherwise processes query chunks against the full
+    key/value sequence with an explicit boolean mask.
     """
     T = q.shape[2]
-    if chunk_size >= T:
+    if doc_ids is None and chunk_size >= T:
         return mx.fast.scaled_dot_product_attention(q, k, v, scale=scale, mask="causal")
 
-    key_pos = mx.arange(T)[None, :]
     outs: list[mx.array] = []
     for start in range(0, T, chunk_size):
         end = min(start + chunk_size, T)
         qc = q[:, :, start:end, :]
-        if end == T:
+        if doc_ids is None and end == T:
             out = mx.fast.scaled_dot_product_attention(qc, k, v, scale=scale, mask="causal")
         else:
-            query_pos = mx.arange(start, end)[:, None]
-            mask = (key_pos <= query_pos)[None, None, :, :]
+            mask = (
+                _causal_mask(start, end, T)
+                if doc_ids is None
+                else _document_mask(doc_ids, start, end, T)
+            )
             out = mx.fast.scaled_dot_product_attention(qc, k, v, scale=scale, mask=mask)
         outs.append(out)
     return mx.concatenate(outs, axis=2)
@@ -97,14 +149,16 @@ class Attention(nn.Module):  # type: ignore[misc]
         self.v_proj = nn.Linear(h, self.n_kv_heads * self.head_dim, bias=False)
         self.o_proj = nn.Linear(self.n_heads * self.head_dim, h, bias=False)
 
-    def __call__(self, x: mx.array, cos: mx.array, sin: mx.array) -> mx.array:
+    def __call__(
+        self, x: mx.array, cos: mx.array, sin: mx.array, doc_ids: mx.array | None = None
+    ) -> mx.array:
         B, T = x.shape[0], x.shape[1]
         q = self.q_proj(x).reshape(B, T, self.n_heads, self.head_dim).transpose(0, 2, 1, 3)
         k = self.k_proj(x).reshape(B, T, self.n_kv_heads, self.head_dim).transpose(0, 2, 1, 3)
         v = self.v_proj(x).reshape(B, T, self.n_kv_heads, self.head_dim).transpose(0, 2, 1, 3)
         q, k = apply_rotary_emb(q, k, cos, sin)
         scale = 1.0 / (self.head_dim**0.5)
-        out = causal_sdpa(q, k, v, scale=scale)
+        out = causal_sdpa(q, k, v, scale=scale, doc_ids=doc_ids)
         out = out.transpose(0, 2, 1, 3).reshape(B, T, self.n_heads * self.head_dim)
         return self.o_proj(out)  # type: ignore[no-any-return]
 
@@ -134,8 +188,10 @@ class TransformerBlock(nn.Module):  # type: ignore[misc]
         self.ffn_norm = RMSNorm(config.hidden_size)
         self.ffn = FeedForward(config)
 
-    def __call__(self, x: mx.array, cos: mx.array, sin: mx.array) -> mx.array:
-        x = x + self.attn(self.attn_norm(x), cos, sin)
+    def __call__(
+        self, x: mx.array, cos: mx.array, sin: mx.array, doc_ids: mx.array | None = None
+    ) -> mx.array:
+        x = x + self.attn(self.attn_norm(x), cos, sin, doc_ids)
         return x + self.ffn(self.ffn_norm(x))
 
 
@@ -150,11 +206,15 @@ class Kestrel(nn.Module):  # type: ignore[misc]
         self.layers = [TransformerBlock(config) for _ in range(config.n_layers)]
         self.final_norm = RMSNorm(config.hidden_size)
 
-    def __call__(self, x: mx.array) -> mx.array:
+    def __call__(self, x: mx.array, doc_ids: mx.array | None = None) -> mx.array:
         h = self.embed(x)
-        cos, sin = precompute_freqs_cis(self.head_dim, x.shape[1], self.config.rope_theta)
+        if doc_ids is None:
+            cos, sin = precompute_freqs_cis(self.head_dim, x.shape[1], self.config.rope_theta)
+        else:
+            positions = document_positions(doc_ids)
+            cos, sin = _freqs_cis_at(self.head_dim, positions, self.config.rope_theta)
         for layer in self.layers:
-            h = layer(h, cos, sin)
+            h = layer(h, cos, sin, doc_ids)
         h = self.final_norm(h)
         return mx.matmul(h, self.embed.weight.T)
 

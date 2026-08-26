@@ -1,10 +1,11 @@
 ---
 id: TASK-005.08.03
 title: 'Model/trainer: document-aware attention, position reset, auto num_steps'
-status: To Do
-assignee: []
+status: Done
+assignee:
+  - '@opencode'
 created_date: '2026-08-26 00:25'
-updated_date: '2026-08-26 00:27'
+updated_date: '2026-08-26 00:51'
 labels:
   - model
   - trainer
@@ -20,6 +21,9 @@ modified_files:
   - src/kestrel/train/pretrain.py
   - tests/test_model_kestrel.py
   - tests/test_trainer.py
+  - tests/test_pretrain.py
+  - configs/kestrel/50m/pretrain.yaml
+  - configs/kestrel/150m/pretrain.yaml
 parent_task_id: TASK-005.08
 priority: high
 ordinal: 21000
@@ -74,9 +78,27 @@ Reference: doc-003.
 
 ## Acceptance Criteria
 <!-- AC:BEGIN -->
-- [ ] #1 A token cannot attend to a previous token with a different doc_id
-- [ ] #2 RoPE positions reset when doc_id changes
-- [ ] #3 Normal generation/check_model path still works without doc_ids
-- [ ] #4 num_steps <= 0 uses dataset estimated_steps for LR schedule
-- [ ] #5 make check is green
+- [x] #1 A token cannot attend to a previous token with a different doc_id
+- [x] #2 RoPE positions reset when doc_id changes
+- [x] #3 Normal generation/check_model path still works without doc_ids
+- [x] #4 num_steps <= 0 uses dataset estimated_steps for LR schedule
+- [x] #5 make check is green
 <!-- AC:END -->
+
+## Implementation Plan
+
+<!-- SECTION:PLAN:BEGIN -->
+1. Add optional doc_ids to Kestrel forward. 2. Build document-aware causal attention mask. 3. Reset RoPE positions at doc_id changes. 4. Update trainer to pass doc_ids and support schedule_steps separate from stop cap. 5. Update pretrain to derive schedule_steps from estimated_steps when num_steps <= 0. 6. Add model/trainer/pretrain tests. 7. Run make check.
+<!-- SECTION:PLAN:END -->
+
+## Implementation Notes
+
+<!-- SECTION:NOTES:BEGIN -->
+Added optional doc_ids to Kestrel, same-document causal attention mask, document-reset RoPE positions, trainer doc_ids pass-through, and auto num_steps <= 0 with schedule_steps from dataset.estimated_steps(). Updated 50M/150M pretrain configs to num_steps=0. make check green: 101 tests.
+<!-- SECTION:NOTES:END -->
+
+## Final Summary
+
+<!-- SECTION:FINAL_SUMMARY:BEGIN -->
+Model and trainer are document-aware: Kestrel accepts doc_ids, restricts attention to same-document causal tokens, resets RoPE positions at document boundaries, and preserves the normal causal path when doc_ids is None. Trainer passes doc_ids through train/validation and supports dataset-exhaustion runs with an estimated LR schedule horizon.
+<!-- SECTION:FINAL_SUMMARY:END -->

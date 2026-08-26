@@ -1,6 +1,7 @@
 """Tests for the shared trainer (TASK-005.03)."""
 
 import math
+from collections.abc import Iterator
 from pathlib import Path
 
 import mlx.core as mx
@@ -86,6 +87,46 @@ def test_lr_schedule() -> None:
     assert warmup == sorted(warmup)  # monotonic increase during warmup
     decay = [lr_at(s, cfg) for s in range(10, 51)]
     assert decay == sorted(decay, reverse=True)  # monotonic decrease during decay
+
+
+def test_lr_schedule_uses_schedule_steps_override() -> None:
+    cfg = TrainerConfig(lr=1.0, warmup_steps=10, num_steps=0)
+    assert lr_at(0, cfg, schedule_steps=50) == 0.0
+    assert lr_at(10, cfg, schedule_steps=50) == pytest.approx(1.0)
+    assert lr_at(50, cfg, schedule_steps=50) == pytest.approx(0.0, abs=1e-9)
+    assert lr_at(25, cfg, schedule_steps=50) != lr_at(25, cfg, schedule_steps=100)
+
+
+class _EstimatedBatches:
+    def __init__(self, batches: list[tuple[mx.array, ...]], steps: int) -> None:
+        self.batches = batches
+        self.steps = steps
+
+    def __iter__(self) -> Iterator[tuple[mx.array, ...]]:
+        return iter(self.batches)
+
+    def estimated_steps(self) -> int:
+        return self.steps
+
+
+def test_train_auto_num_steps_uses_dataset_estimated_steps(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    model = _tiny_model()
+    train_ds = _EstimatedBatches(_batches(12, 2, 16, 64, seed=1), steps=7)
+    val_ds = _batches(3, 2, 16, 64, seed=2)
+    cfg = TrainerConfig(
+        num_steps=0,
+        warmup_steps=2,
+        eval_every=100,
+        log_every=100,
+        save_every=100,
+        output_dir=str(tmp_path),
+    )
+    result = train(model, train_ds, val_ds, cfg)
+    assert result.num_steps == 12
+    assert result.schedule_steps == 7
+    assert "schedule_steps=7" in capsys.readouterr().out
 
 
 def test_checkpoint_reloads(tmp_path: Path) -> None:

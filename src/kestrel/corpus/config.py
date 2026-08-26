@@ -4,6 +4,9 @@ The corpus is a weighted mix of text sources. Each component names a source
 (``hf`` = stream from a HuggingFace dataset, or ``local`` = read an existing
 file) and the fraction of the total byte budget it should contribute. Component
 fractions must sum to 1.0.
+
+The default output format is document-level JSONL: one physical line is one
+document, and internal newlines are preserved inside the JSON ``text`` field.
 """
 
 from __future__ import annotations
@@ -52,16 +55,23 @@ class CorpusConfig(BaseConfig):
     the source is exhausted). Component fractions must sum to 1.0.
 
     The assembled corpus is split into train/val(/test) by a deterministic,
-    order-independent per-line hash (seeded by ``seed``): each line is routed to
-    ``test`` if its hash falls in ``[0, test_fraction)``, else ``val`` if in
-    ``[test_fraction, test_fraction + val_fraction)``, else ``train``. This gives
-    a reproducible held-out validation (and optional test) slice of the same
-    distribution, with no document leaking across splits.
+    order-independent per-document hash (seeded by ``seed``): each document is
+    routed to ``test`` if its hash falls in ``[0, test_fraction)``, else ``val``
+    if in ``[test_fraction, test_fraction + val_fraction)``, else ``train``. This
+    gives a reproducible held-out validation (and optional test) slice of the
+    same distribution, with no document leaking across splits.
+
+    ``output_format="jsonl"`` writes one JSON document per physical line.
+    ``output_format="txt"`` is a legacy fallback where one physical line is one
+    document. ``tokenizer_path`` optionally enables exact token counts in the
+    per-split ``manifest.json`` files.
     """
 
     total_bytes: int = Field(gt=0)
     seed: int = 0
     output_dir: str = "data/corpus"
+    output_format: Literal["jsonl", "txt"] = "jsonl"
+    tokenizer_path: str | None = None
     val_fraction: float = Field(ge=0.0, le=1.0, default=0.1)
     test_fraction: float = Field(ge=0.0, le=1.0, default=0.0)
     components: list[ComponentConfig] = Field(min_length=1)

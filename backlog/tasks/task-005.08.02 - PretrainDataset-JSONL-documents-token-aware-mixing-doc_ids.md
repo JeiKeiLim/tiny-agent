@@ -1,10 +1,11 @@
 ---
 id: TASK-005.08.02
 title: 'PretrainDataset: JSONL documents, token-aware mixing, doc_ids'
-status: To Do
-assignee: []
+status: Done
+assignee:
+  - '@opencode'
 created_date: '2026-08-26 00:25'
-updated_date: '2026-08-26 00:25'
+updated_date: '2026-08-26 00:46'
 labels:
   - data
   - pretraining
@@ -16,6 +17,8 @@ documentation:
 modified_files:
   - src/kestrel/data/pretrain_dataset.py
   - tests/test_pretrain_dataset.py
+  - src/kestrel/train/trainer.py
+  - tests/test_pretrain.py
 parent_task_id: TASK-005.08
 priority: high
 ordinal: 20000
@@ -69,9 +72,27 @@ Reference: doc-003.
 
 ## Acceptance Criteria
 <!-- AC:BEGIN -->
-- [ ] #1 Multi-line document produces one doc_id, not multiple doc_ids
-- [ ] #2 Batches from a multi-domain directory contain more than one doc_id over a short run
-- [ ] #3 Token-share test with skewed manifest token counts stays within 5 percentage points over at least 10k scheduled documents
-- [ ] #4 estimated_steps matches total manifest tokens divided by batch_size * seq_len, rounded down
-- [ ] #5 make check is green
+- [x] #1 Multi-line document produces one doc_id, not multiple doc_ids
+- [x] #2 Batches from a multi-domain directory contain more than one doc_id over a short run
+- [x] #3 Token-share test with skewed manifest token counts stays within 5 percentage points over at least 10k scheduled documents
+- [x] #4 estimated_steps matches total manifest tokens divided by batch_size * seq_len, rounded down
+- [x] #5 make check is green
 <!-- AC:END -->
+
+## Implementation Plan
+
+<!-- SECTION:PLAN:BEGIN -->
+1. Replace PretrainDataset txt/line streaming with JSONL document sources. 2. Parse manifest.json for target fractions and token/doc totals. 3. Add token-deficit domain scheduler. 4. Emit im_start/im_end and doc_ids per packed token. 5. Add estimated_steps(). 6. Update trainer minimally to accept 2- or 3-tuple batches. 7. Update dataset/pretrain tests for JSONL and doc_ids. 8. Run make check.
+<!-- SECTION:PLAN:END -->
+
+## Implementation Notes
+
+<!-- SECTION:NOTES:BEGIN -->
+Implemented JSONL document sources, manifest parsing, token-deficit scheduler, im_start/im_end wrapping, doc_ids emission, and estimated_steps(). Updated trainer to accept 2- or 3-tuple batches. Removed temporary legacy txt override from test_pretrain. make check green: 95 tests.
+<!-- SECTION:NOTES:END -->
+
+## Final Summary
+
+<!-- SECTION:FINAL_SUMMARY:BEGIN -->
+PretrainDataset now consumes document-level JSONL + manifest.json, emits (input, target, doc_ids) int32 batches, uses token-deficit domain mixing, and exposes estimated_steps(). Trainer minimally accepts document-aware batches while remaining compatible with legacy 2-tuples.
+<!-- SECTION:FINAL_SUMMARY:END -->
