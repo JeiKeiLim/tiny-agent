@@ -6,7 +6,7 @@ title: >-
 status: In Progress
 assignee: []
 created_date: '2026-08-24 01:57'
-updated_date: '2026-08-26 00:28'
+updated_date: '2026-08-26 01:36'
 labels: []
 milestone: m-1
 dependencies:
@@ -59,3 +59,12 @@ Investigation after 50M full run and 150M partial run: 50M completed 28810 steps
 
 Root cause update: the weak 50M/150M outputs are not only from undertraining or byte-weighted line mixing. The corpus pipeline flattened HF documents into physical lines. prepare_tokenizer_data.py wrote text + newline, and corpus/builder.py treated physical lines as documents. Current web/code corpus is lossy. Fix is tracked under TASK-005.08: document-level JSONL corpus, manifest, token-aware mixing, doc_ids, document-aware attention, position reset, and auto num_steps.
 <!-- SECTION:NOTES:END -->
+
+## Comments
+
+<!-- COMMENTS:BEGIN -->
+created: 2026-08-26 01:36
+---
+2026-08-26 dataset volume review: the current ~275M-token data/corpus run is best treated as a pipeline smoke run, not as the final 50M/150M pretraining budget. The follow-up expanded corpus plan (~12GiB raw, ~2.97B estimated train tokens, SmolLM-style FineWeb-Edu/code/synthetic mix) is tracked under TASK-005.10.
+---
+<!-- COMMENTS:END -->

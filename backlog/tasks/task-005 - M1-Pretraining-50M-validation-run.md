@@ -4,7 +4,7 @@ title: M1 - Pretraining (50M validation run)
 status: To Do
 assignee: []
 created_date: '2026-08-24 01:54'
-updated_date: '2026-08-24 01:57'
+updated_date: '2026-08-26 01:36'
 labels: []
 milestone: m-1
 dependencies: []
@@ -28,3 +28,12 @@ Scope (subtasks):
 
 Decisions locked (2026-08-24): 50M-first (150M is a later manual pass); reuse the existing 1GB tokenizer sample (data/tokenizer_train/) via a 'local' corpus source (no new download); build the full pluggable corpus/ now; build a minimal generate() now; 150M stays 32Lx640; '1B' = 1B tokens of data (not a model size). Full ~1B-token run is a separate follow-up milestone.
 <!-- SECTION:DESCRIPTION:END -->
+
+## Comments
+
+<!-- COMMENTS:BEGIN -->
+created: 2026-08-26 01:36
+---
+2026-08-26: M1 smoke pipeline is complete enough to move to a serious data budget. The expanded ~12GiB / ~2.97B-token corpus work is tracked under TASK-005.10.
+---
+<!-- COMMENTS:END -->
