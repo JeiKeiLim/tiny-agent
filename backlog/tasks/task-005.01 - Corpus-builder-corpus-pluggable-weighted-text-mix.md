@@ -5,7 +5,7 @@ status: Done
 assignee:
   - '@limjk'
 created_date: '2026-08-24 01:55'
-updated_date: '2026-08-24 06:36'
+updated_date: '2026-08-26 00:28'
 labels: []
 milestone: m-1
 dependencies: []
@@ -71,6 +71,8 @@ Reopened: adding deterministic train/val(/test) split. This was slipped out of t
 Split implemented (Option A, hash-based): CorpusConfig gains val_fraction=0.1/test_fraction=0.0 + validator; builder routes each line via sha256(f'{seed}:{line}') to output_dir/{train,val[,test]}/<name>.txt. 63 tests green (was 57; +6 split tests). Real build: data/corpus/train ~922MB + val ~112MB (~90/10), source mix 85/10/5 preserved in each split. Dataset 005.02 unchanged (point at data/corpus/train or /val).
 
 Decision (2026-08-24): test_fraction=0 for M1. For a from-scratch base model there is no single fixed test set; the 'test' is (a) held-out perplexity (the val slice can serve this) and (b) downstream benchmarks (GSM8K test, BFCL unseen, agent tasks) in the eval milestone (doc-001:75/313/316/336) using EXTERNAL datasets, not a corpus slice. If a clean unbiased final perplexity is wanted later, bump test_fraction to ~0.05 (val for in-loop/stopping, test for final perplexity) - one-line config change. In-loop val loss is cheap at our scale (50M model), so we use the nanoGPT pattern (val loss every eval_every steps), not the large-scale 'periodic held-out perplexity only' approach. Verified via web research (nanoGPT train.py: train.bin+val.bin, estimate_loss() over eval_iters, val loss every eval_interval, best-val checkpointing).
+
+Follow-up: original corpus builder preserved weighted mixing but not document structure. TASK-005.08.01 tracks document-level JSONL output and manifest generation.
 <!-- SECTION:NOTES:END -->
 
 ## Final Summary

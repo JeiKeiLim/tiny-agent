@@ -7,7 +7,7 @@ status: Done
 assignee:
   - '@limjk'
 created_date: '2026-08-24 01:55'
-updated_date: '2026-08-24 06:36'
+updated_date: '2026-08-26 00:28'
 labels: []
 milestone: m-1
 dependencies: []
@@ -57,6 +57,8 @@ Quantitative targets:
 
 <!-- SECTION:NOTES:BEGIN -->
 Implemented pretrain_dataset.py (PretrainDatasetConfig + PretrainDataset iterable) + test_pretrain_dataset.py (6 tests, tiny in-test tokenizer). make check green (57 tests). Real-usage smoke: real tokenizer + data/corpus/ dir at context_length=2048 -> batch (2,2048) int32, shift tgt[:,:-1]==inp[:,1:] holds. Shift convention matches check_model loss (cross_entropy(logits[:,:-1], input[:,1:])). Full batches only (trailing partial dropped); no line/doc separators (raw packing, per plan).
+
+Follow-up: original PretrainDataset tokenizes physical lines and does not emit document boundaries. TASK-005.08.02 tracks JSONL document consumption, token-aware mixing, and doc_ids.
 <!-- SECTION:NOTES:END -->
 
 ## Final Summary

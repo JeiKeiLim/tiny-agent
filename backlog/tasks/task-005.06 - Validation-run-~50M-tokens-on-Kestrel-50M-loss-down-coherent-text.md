@@ -6,7 +6,7 @@ title: >-
 status: In Progress
 assignee: []
 created_date: '2026-08-24 01:57'
-updated_date: '2026-08-25 00:13'
+updated_date: '2026-08-26 00:28'
 labels: []
 milestone: m-1
 dependencies:
@@ -52,4 +52,10 @@ Quantitative targets (the M1 gate):
 2026-08-25 user selected seq_len=1024 for M1. Updated configs/kestrel/50m/pretrain.yaml to seq_len=1024 and num_steps=40000; make check green.
 
 2026-08-25 identified in-loop validation bias: PretrainDataset reads corpus domain files sequentially, so the current M1 val loss is not a representative web/code/jsonl mix. Created TASK-005.02.01 to add deterministic weighted multi-file mixing. Do not interpret current/previous M1 val loss as mixed-domain until that task lands.
+
+M1 validation loss caveat: runs using the pre-TASK-005.02.01 PretrainDataset consumed val domain files sequentially, so the first eval_iters batches were biased toward the first val file rather than the intended web/code/jsonl mix. After TASK-005.02.01 lands, validation batches use the same weighted multi-file scheduler and are more representative.
+
+Investigation after 50M full run and 150M partial run: 50M completed 28810 steps with final train loss 1.048 but best val 3.944 at step 25000 and final val 4.588. The late train-loss drop is explained by the current byte-weighted line scheduler: jsonl exhausts early, web exhausts near step 25.8k, and the final ~3k steps are effectively code-only. Generation from 50M step_024000/final and 150M step_022000 is still word salad or repetitive loops. 150M uses batch_size 4, so 40000 steps is only ~164M tokens and stops before corpus exhaustion; it is not a same-token-budget comparison with the 50M run. Conclusion: current outputs are expected for this data budget; the main follow-ups are token-aware domain mixing, a fair 50M/150M token budget, and more pretraining data if coherent generation is the goal.
+
+Root cause update: the weak 50M/150M outputs are not only from undertraining or byte-weighted line mixing. The corpus pipeline flattened HF documents into physical lines. prepare_tokenizer_data.py wrote text + newline, and corpus/builder.py treated physical lines as documents. Current web/code corpus is lossy. Fix is tracked under TASK-005.08: document-level JSONL corpus, manifest, token-aware mixing, doc_ids, document-aware attention, position reset, and auto num_steps.
 <!-- SECTION:NOTES:END -->

@@ -1,15 +1,19 @@
 ---
 id: TASK-005.02.01
 title: Mix multi-file pretrain batches instead of reading domain files sequentially
-status: To Do
-assignee: []
+status: Done
+assignee:
+  - '@opencode'
 created_date: '2026-08-25 00:13'
+updated_date: '2026-08-26 00:28'
 labels:
   - data
   - pretrain
   - validation
 milestone: m-1
 dependencies: []
+documentation:
+  - doc-002
 modified_files:
   - src/kestrel/data/pretrain_dataset.py
   - tests/test_pretrain_dataset.py
@@ -46,19 +50,46 @@ Gotchas:
 
 ## Acceptance Criteria
 <!-- AC:BEGIN -->
-- [ ] #1 A unit test with multiple tiny .txt files proves yielded batches contain tokens from more than one file
-- [ ] #2 A unit test with skewed file sizes proves the scheduled file share is within 5 percentage points of the byte-size weights over at least 10k scheduled line draws
-- [ ] #3 Single-file dataset behavior remains unchanged
-- [ ] #4 make check is green
-- [ ] #5 TASK-005.06 notes record that prior/current M1 val loss was domain-block biased until this task lands
+- [x] #1 A unit test with multiple tiny .txt files proves yielded batches contain tokens from more than one file
+- [x] #2 A unit test with skewed file sizes proves the scheduled file share is within 5 percentage points of the byte-size weights over at least 10k scheduled line draws
+- [x] #3 Single-file dataset behavior remains unchanged
+- [x] #4 make check is green
+- [x] #5 TASK-005.06 notes record that prior/current M1 val loss was domain-block biased until this task lands
 <!-- AC:END -->
 
 ## Implementation Plan
 
 <!-- SECTION:PLAN:BEGIN -->
-1. Inspect tests/test_pretrain_dataset.py and current PretrainDataset behavior.
-2. Implement a deterministic weighted multi-file line scheduler in src/kestrel/data/pretrain_dataset.py.
-3. Add unit tests for multi-file mixing, weighted distribution, determinism, and single-file behavior.
-4. Run make check.
-5. Append a note to TASK-005.06 explaining the old val-loss bias.
+1. Add a WeightedLineScheduler helper in src/kestrel/data/pretrain_dataset.py that yields (path, line) pairs using seeded weighted sampling across active files.
+2. Change PretrainDataset._resolve_files to return (path, weight) pairs, using byte size as the weight for directory inputs and a fixed weight for single-file inputs.
+3. Replace the sequential file loop in PretrainDataset.__iter__ with the weighted line scheduler while preserving the existing token packing and total_tokens behavior.
+4. Add tests for multi-file mixing, weighted share tolerance, determinism, and single-file behavior.
+5. Run make check.
+6. Append a note to TASK-005.06 explaining that prior M1 validation loss was domain-block biased until this task lands.
 <!-- SECTION:PLAN:END -->
+
+## Implementation Notes
+
+<!-- SECTION:NOTES:BEGIN -->
+Research findings on standard pretraining data mixing recorded in doc-002: weighted domain mixing and interleaving are standard in public LLM recipes; current Kestrel domain-block order is an implementation artifact; the planned weighted multi-file scheduler aligns the design with standard practice.
+
+Implemented WeightedLineScheduler and switched PretrainDataset directory inputs to seeded weighted line sampling. Added tests for multi-file mixing, weighted share tolerance, determinism, exhaustion, and single-file line order. make check is green with 83 tests.
+
+Post-run correction: byte-weighted line sampling reduced early code dominance, but it is not the full fix. The corpus itself was flattened from document-level HF rows into physical lines. Document-aware corpus/dataset/model work is tracked under TASK-005.08.
+<!-- SECTION:NOTES:END -->
+
+## Comments
+
+<!-- COMMENTS:BEGIN -->
+author: @opencode
+created: 2026-08-25 23:04
+---
+Post-run investigation: byte-weighted line sampling does not produce the intended token-domain mix because line lengths differ across web/code/jsonl. In the 50M run, jsonl exhausted early and the final ~3k steps were code-only. Follow-up should use token-aware weights, a corpus manifest, or a deficit-based token scheduler.
+---
+<!-- COMMENTS:END -->
+
+## Final Summary
+
+<!-- SECTION:FINAL_SUMMARY:BEGIN -->
+Implemented deterministic weighted multi-file line scheduling for PretrainDataset. Directory inputs now sample lines from web/code/jsonl files according to byte-size weights instead of consuming files sequentially, making both training and sampled validation more representative. Verified with new unit tests and make check (83 tests green).
+<!-- SECTION:FINAL_SUMMARY:END -->

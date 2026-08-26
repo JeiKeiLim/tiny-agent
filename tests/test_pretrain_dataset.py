@@ -4,6 +4,8 @@ A tiny BPE tokenizer is trained in-test (same pattern as test_model_check.py) so
 tests do not depend on the gitignored checkpoints/tokenizer/tokenizer.json.
 """
 
+from collections import Counter
+from itertools import islice
 from pathlib import Path
 
 import mlx.core as mx
@@ -11,7 +13,11 @@ import pytest
 from pydantic import ValidationError
 from tokenizers import Tokenizer
 
-from kestrel.data.pretrain_dataset import PretrainDataset, PretrainDatasetConfig
+from kestrel.data.pretrain_dataset import (
+    PretrainDataset,
+    PretrainDatasetConfig,
+    WeightedLineScheduler,
+)
 from kestrel.tokenizer.config import TokenizerConfig
 from kestrel.tokenizer.train import train
 
@@ -107,3 +113,76 @@ def test_full_batches_only(tmp_path: Path) -> None:
     data = _write(tmp_path, "data.txt", SENTENCE * 3)
     total = sum(inp.shape[0] * inp.shape[1] for inp, _ in PretrainDataset(_config(data, tok)))
     assert total % (2 * 8) == 0
+
+
+def test_multi_file_batches_mix_domains(tmp_path: Path) -> None:
+    tok = _tiny_tokenizer(tmp_path)
+    d = tmp_path / "data"
+    d.mkdir()
+    (d / "a.txt").write_text("alpha " * 200, encoding="utf-8")
+    (d / "b.txt").write_text("beta " * 200, encoding="utf-8")
+    dataset = PretrainDataset(_config(d, tok, batch_size=1))
+    decoder = Tokenizer.from_file(str(tok))
+    decoded = " ".join(decoder.decode(inp[0].tolist()) for inp, _ in dataset)
+    assert "alpha" in decoded
+    assert "beta" in decoded
+
+
+def test_single_file_preserves_line_order(tmp_path: Path) -> None:
+    tok = _tiny_tokenizer(tmp_path)
+    words = [f"marker{index:02d}" for index in range(10)]
+    text = (" ".join(words) + " ") * 10
+    data = _write(tmp_path, "data.txt", text)
+    inp, _ = next(iter(PretrainDataset(_config(data, tok, batch_size=1, context_length=256))))
+    decoded = Tokenizer.from_file(str(tok)).decode(inp[0].tolist())
+    positions = [decoded.index(word) for word in words]
+    assert positions == sorted(positions)
+
+
+def _scheduler_dir(tmp_path: Path, counts: dict[str, int]) -> Path:
+    d = tmp_path / "data"
+    d.mkdir()
+    for name, count in counts.items():
+        (d / f"{name}.txt").write_text(f"{name}\n" * count, encoding="utf-8")
+    return d
+
+
+def test_weighted_scheduler_share_within_tolerance(tmp_path: Path) -> None:
+    d = _scheduler_dir(tmp_path, {"a": 100_000, "b": 5_000, "c": 5_000})
+    files = PretrainDataset._resolve_files(str(d))
+    scheduler = WeightedLineScheduler(files, seed=0)
+    counts: Counter[Path] = Counter()
+    gen = scheduler.iter_lines()
+    for path, _ in islice(gen, 100_000):
+        counts[path] += 1
+    gen.close()
+
+    total = sum(counts.values())
+    assert total == 100_000
+    total_weight = sum(weight for _, weight in files)
+    for path, weight in files:
+        expected = weight / total_weight
+        actual = counts[path] / total
+        assert abs(actual - expected) <= 0.05
+
+
+def _scheduled_names(files: list[tuple[Path, float]], seed: int, count: int) -> list[str]:
+    scheduler = WeightedLineScheduler(files, seed=seed)
+    return [path.name for path, _ in islice(scheduler.iter_lines(), count)]
+
+
+def test_weighted_scheduler_deterministic(tmp_path: Path) -> None:
+    d = _scheduler_dir(tmp_path, {"a": 5_000, "b": 5_000, "c": 5_000})
+    files = PretrainDataset._resolve_files(str(d))
+    first = _scheduled_names(files, seed=7, count=2_000)
+    second = _scheduled_names(files, seed=7, count=2_000)
+    assert first == second
+
+
+def test_weighted_scheduler_exhausts_all_files(tmp_path: Path) -> None:
+    d = _scheduler_dir(tmp_path, {"a": 3, "b": 4, "c": 5})
+    files = PretrainDataset._resolve_files(str(d))
+    lines = list(WeightedLineScheduler(files, seed=0).iter_lines())
+    assert len(lines) == 12
+    counts = Counter(path.name for path, _ in lines)
+    assert counts == Counter({"a.txt": 3, "b.txt": 4, "c.txt": 5})
