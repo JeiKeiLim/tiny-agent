@@ -6,7 +6,7 @@ title: >-
 status: In Progress
 assignee: []
 created_date: '2026-08-24 01:57'
-updated_date: '2026-08-26 01:36'
+updated_date: '2026-08-26 04:33'
 labels: []
 milestone: m-1
 dependencies:
@@ -66,5 +66,10 @@ Root cause update: the weak 50M/150M outputs are not only from undertraining or 
 created: 2026-08-26 01:36
 ---
 2026-08-26 dataset volume review: the current ~275M-token data/corpus run is best treated as a pipeline smoke run, not as the final 50M/150M pretraining budget. The follow-up expanded corpus plan (~12GiB raw, ~2.97B estimated train tokens, SmolLM-style FineWeb-Edu/code/synthetic mix) is tracked under TASK-005.10.
+---
+
+created: 2026-08-26 04:33
+---
+2026-08-26 status: Keep In Progress. The old ~275M data/corpus run should remain classified as a pipeline smoke run, not the final M1 validation result. The current 50M 12GiB Chinchilla-capped run is the active validation attempt, but it cannot truly resume from current weights-only checkpoints if killed. Close this task only after a run completes or after resume support lands and a resumed run completes, with recorded final loss, validation loss, 2-3 generated samples, tokens/sec, wall-clock time, and checkpoint reload evidence.
 ---
 <!-- COMMENTS:END -->
