@@ -1,16 +1,21 @@
 
 # Kestrel — Project Context
 
-Kestrel is a small-scale, modern **agentic LLM training pipeline** on [MLX](https://github.com/ml-explore/mlx). It trains a **pair of small decoder-only models (50M and 150M)** from scratch through the full pipeline (pretrain → long-context → SFT → RL → serve + agent → eval), plus a **PEFT/LoRA track** on a pretrained base. The goal is learning the pipeline and the 50M↔150M scaling comparison — not raw capability.
+Kestrel is a small-scale, modern **agentic LLM training pipeline** on [MLX](https://github.com/ml-explore/mlx). It is meant to train a **pair of small decoder-only models (50M and 150M)** from scratch through the full pipeline (pretrain → long-context → SFT → RL → serve + agent → eval), plus a **PEFT/LoRA track** (Track B) on a pretrained base. The goal is learning the pipeline and the 50M↔150M scaling comparison — not raw capability.
+
+## Status
+
+- **Implemented:** scaffolding + strict YAML→Pydantic config loader, the Kestrel model (`src/kestrel/model/`) with `generate()`, the byte-level BPE tokenizer (`tokenizer/`), the corpus builder (`corpus/`), the document-aware pretrain dataset (`data/pretrain_dataset.py`), the shared MLX trainer (`train/trainer.py`) with checkpoint retention/resume and `run.jsonl` logging, and the pretrain entry point (`scripts/run_pretrain.py`).
+- **Not yet implemented:** long-context, SFT, RL, serve + agent, eval, and Track B (PEFT/LoRA). They are designed in `doc-001` but have no code yet — do not assume their modules, configs, or scripts exist.
 
 ## Stack
 - **Python 3.13**, managed with **uv** (`.venv` + `uv.lock`; some environments need `uv --system-certs` for network).
 - **MLX** for all ML; **Pydantic** (strict) for config models; **Ruff** (lint + format), **mypy** (strict), **pytest** + **pytest-cov**.
 
 ## Commands (Makefile)
-- `make install` — create `.venv` + install deps (runtime + dev).
+- `make install` — create `.venv` + install deps (runtime + dev). `make sync` is an alias.
 - `make check` — **lint (ruff check + format) + typecheck + test** (the gate for any code change).
-- `make format` / `make lint` / `make typecheck` / `make test` / `make coverage` — individual steps.
+- `make format` / `make lint` / `make typecheck` / `make test` / `make coverage` / `make clean` — individual steps.
 - `make help` — list all targets.
 
 ## Code quality — MANDATORY
@@ -20,6 +25,13 @@ Conventions:
 - Configs are **strict Pydantic models** (subclass `BaseConfig`); a mistyped value or unknown key must raise `ValidationError`.
 - Tests live in `tests/`, mirror the source layout, and test the **code** (not config data values).
 - Keep code modular and config-driven (one module per concern; see plan doc §6).
+- When behavior changes (commands, layout, checkpoint format, pipeline stages), update `README.md` and this file in the same change.
+
+## Checkpoint / resume invariants
+
+- A **full** checkpoint dir is self-describing and resumable: `weights.npz` + `optimizer.npz` + `state.json` (training state + config/tokenizer/corpus hashes) + optional `config/` and `run.jsonl` snapshots. `scripts/run_pretrain.py --resume DIR` re-validates those hashes against the current config before resuming.
+- When touching `src/kestrel/train/`, preserve resumability: `state.json` stays complete and is written last inside the atomic tmp-dir + rename flow in `train/checkpoint.py`.
+- Weights-only checkpoints (no `state.json`) are **not** resumable — never treat a dir with just `weights.npz` as resumable.
 
 ## Backlog task authoring — MANDATORY
 

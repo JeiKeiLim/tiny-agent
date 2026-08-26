@@ -11,12 +11,12 @@ Kestrel trains a **pair of small decoder-only models (50M and 150M)** from scrat
 ## Two tracks
 
 - **Track A (from scratch):** train Kestrel-50M and Kestrel-150M through the whole pipeline with full fine-tuning.
-- **Track B (PEFT / LoRA):** fine-tune a pretrained base (default Qwen3-1.7B) with LoRA and LoRA-like methods (QLoRA, DoRA, adapters) behind a pluggable `PEFTMethod` interface. Shares the SFT / RL / serve / eval code with Track A.
+- **Track B (PEFT / LoRA, planned):** fine-tune a pretrained base (default Qwen3-1.7B) with LoRA and LoRA-like methods (QLoRA, DoRA, adapters) behind a pluggable `PEFTMethod` interface. Shares the SFT / RL / serve / eval code with Track A.
 
 ## Pipeline (Track A)
 
 1. **Tokenizer** — byte-level BPE, 16k vocab (shared by both sizes).
-2. **Pretrain** — ~1B tokens (FineWeb-Edu + Python + synthesized JSONL).
+2. **Pretrain** — Chinchilla-capped (~1B tokens for 50M; a single pass over the corpus for 150M) on FineWeb-Edu + Python + synthesized JSONL.
 3. **Long-context** — RoPE interpolation + staged continuation (4k → 8k → 16k).
 4. **SFT** — hybrid tool-calling + chain-of-thought data, unified chat template.
 5. **RL** — GRPO. **RL-A** (pure math) + **RL-B** (synthetic agentic tool environment).
@@ -25,42 +25,43 @@ Kestrel trains a **pair of small decoder-only models (50M and 150M)** from scrat
 
 ## Status
 
-**Milestone M0 (Foundation) is complete** — all 10 tasks done:
+**Milestone M0 (Foundation) is complete:**
 
 - **Scaffolding** (`TASK-001`) — the `src/kestrel/` package, the generic YAML→Pydantic config loader, `ModelConfig`, sample configs, and the uv environment.
 - **Code quality infra** (`TASK-004`) — strict Pydantic configs, Ruff + mypy (strict) + pytest, and the `make check` gate.
 - **BPE tokenizer** (`TASK-003`) — training-data prep, 16k-vocab byte-level BPE training, round-trip + byte-coverage verification (as tests), and an interactive explorer. Guarantees a lossless round-trip for any byte sequence (all 256 byte-tokens are in the vocab).
 - **Kestrel model** (`TASK-002`) — the decoder-only transformer (`model/kestrel.py`: pre-norm RMSNorm, RoPE, GQA, SwiGLU, tied embeddings), model I/O (`model/io.py`: `load(config, checkpoint)` + `save(model, path)`), and a smoke-test CLI (`scripts/check_model.py`).
 
-Next: the remaining pipeline stages (pretrain → long-context → SFT → RL → serve + agent → eval) are designed in the project plan and will be built milestone by milestone, starting with pretraining.
+**Milestone M1 (Pretraining) is implemented and currently being validated** with a Kestrel-50M run:
+
+- **Corpus builder** — pluggable weighted text mix (`corpus/`) producing document-level JSONL + per-split manifests; built by `scripts/build_corpus.py` (currently a ~12 GiB corpus in `data/corpus-12g`).
+- **Pretrain dataset** — JSONL documents → tokenized `(input, target)` batches with document-aware mixing (`data/pretrain_dataset.py`).
+- **Trainer** — shared MLX training loop (`train/trainer.py`) with a live `run.jsonl` log, `step_NNNNNN` / `best` / `final` checkpoints, resume from a full checkpoint, and a retention policy.
+- **Pretrain entry point** — `scripts/run_pretrain.py` with `configs/kestrel/50m/pretrain.yaml` and `configs/kestrel/150m/pretrain.yaml`, plus `generate()` (`model/generate.py`) for autoregressive sampling.
+
+**Planned, not yet built:** the later Track A stages (long-context, SFT, RL, serve + agent, eval) and Track B (PEFT/LoRA).
 
 ## Repo layout
 
 ```
 tiny-agent/
-  configs/            # by model
+  configs/
+    tokenizer/        # train.yaml, train_data.yaml
     kestrel/          # from-scratch (Track A) — family of 2 sizes
-      tokenizer.yaml  corpus.yaml
-      50m/            model.yaml  pretrain.yaml  long_context.yaml
-                      sft.yaml  rl_a.yaml  rl_b.yaml  serve.yaml  agent.yaml  eval.yaml
-      150m/           model.yaml  ...  peft_sft.yaml  peft_rl.yaml
-    qwen3_1_7b/       # pretrained base (Track B)
+      corpus.yaml     # pretrain corpus (output: data/corpus-12g)
+      50m/            # model.yaml, pretrain.yaml
+      150m/           # model.yaml, pretrain.yaml
   src/kestrel/
-    common/           # config (YAML→Pydantic), logging, utils
-    model/            # config.py, kestrel.py, pretrained.py, io.py (load/save)
-    tokenizer/        # (Track A) train BPE
-    corpus/           # (Track A) pluggable corpus builder
-    data/             # dataset prep (tokenizer sample, pretrain, sft)
-    train/            # trainer.py + pretrain.py, long_context.py, sft.py, rl/
-    peft/             # PEFTMethod iface + lora/qlora/dora/adapter + registry
-    tools/            # shared tool registry + impls + task-suite generator
-    env/              # agentic environment
-    agent/            # loop, client, parse, context, trace
-    serve/            # generate.py (MLX), server.py (OpenAI-compatible)
-    eval/             # metrics, math, tool_calling, agent_task, perplexity
-  scripts/            # one entry point per phase
+    common/           # config (YAML→Pydantic), logging
+    model/            # config.py, kestrel.py, io.py (load/save), generate.py
+    tokenizer/        # config.py, train.py, visualize.py
+    corpus/           # config.py, builder.py (pluggable corpus builder)
+    data/             # prepare_tokenizer_data.py, pretrain_dataset.py, tokenizer_data_config.py
+    train/            # trainer.py, pretrain.py, checkpoint.py, rl/ (empty)
+    peft/  tools/  env/  agent/  serve/  eval/   # planned (empty packages)
+  scripts/            # build_corpus.py, check_model.py, run_pretrain.py, visualize_tokenizer.py
   tests/
-  data/  checkpoints/  outputs/
+  data/  checkpoints/ # runtime artifacts (gitignored)
 ```
 
 ## Getting started
@@ -73,6 +74,8 @@ make check       # lint + typecheck + test
 ```
 
 > Note: in some environments `uv` needs `--system-certs` for network operations (TLS).
+
+The pretraining workflow is: prepare tokenizer data → train tokenizer → build corpus → check model → pretrain (resumable).
 
 ### Tokenizer training data
 
@@ -106,6 +109,16 @@ An interactive explorer renders any text as color-blocked token spans with the t
 uv run python scripts/visualize_tokenizer.py [--verbose]
 ```
 
+### Corpus build
+
+The pretrain corpus is a weighted mix (web + code + synthetic) written as document-level JSONL with per-split manifests:
+
+```bash
+uv run python scripts/build_corpus.py --config configs/kestrel/corpus.yaml [--force]
+```
+
+Sources, fractions, and the total-byte budget are set in `configs/kestrel/corpus.yaml`. The output is currently `data/corpus-12g` (temporary name; the canonical `data/corpus` rename is pending the active run). Components that already verify against their manifest are skipped; `--force` rebuilds.
+
 ### Model check
 
 A standalone smoke-test CLI loads a model (random-init or from a checkpoint), runs a forward pass, and prints the param count, logits shape, CE loss, and top-k tokens:
@@ -114,7 +127,24 @@ A standalone smoke-test CLI loads a model (random-init or from a checkpoint), ru
 uv run python scripts/check_model.py --config configs/kestrel/50m/model.yaml
 ```
 
-Add `--checkpoint <path>` to load a trained checkpoint instead of random init. On an untrained model the loss is ~ln(vocab) (~9.7 for 16k) and the top tokens are gibberish — expected, not a bug.
+Add `--checkpoint <path>` to load a trained checkpoint instead of random init, and `--generate` to sample text after the report. On an untrained model the loss is ~ln(vocab) (~9.7 for 16k) and the top tokens are gibberish — expected, not a bug.
+
+### Pretrain
+
+```bash
+uv run python scripts/run_pretrain.py --config configs/kestrel/50m/pretrain.yaml
+```
+
+The 50M config is Chinchilla-capped (~1B tokens, a prefix of the corpus); the 150M config runs a single pass over the whole corpus. Both reference `configs/kestrel/corpus.yaml` and the trained tokenizer.
+
+**Checkpoints and resume.** Training writes a live `run.jsonl` to the output dir (`checkpoints/pretrain/50m`) plus checkpoints: `step_NNNNNN` every `save_every` steps, `best` on a new best val loss, and `final` at the end. Each is a *full* checkpoint — `weights.npz`, `optimizer.npz`, `state.json`, config snapshots, and a `run.jsonl` snapshot — so any of them can be resumed:
+
+```bash
+uv run python scripts/run_pretrain.py --config configs/kestrel/50m/pretrain.yaml --resume <output_dir>/step_004000
+# also: --resume <output_dir>/best  |  --resume <output_dir>/final
+```
+
+Retention: old `step_NNNNNN` dirs are pruned to `keep_latest_checkpoints` (5 in the 50M config); `best` is kept while `keep_best_checkpoint` is true. Weights-only checkpoint dirs (e.g. the archived `checkpoints/pretrain/archive-v0/`) are *not* resumable — resume requires the full checkpoint layout.
 
 ## Code quality
 
@@ -129,12 +159,14 @@ Makefile targets:
 
 | Target | Runs |
 |--------|------|
+| `make help` | list available targets |
 | `make install` | `uv sync --all-groups` |
-| `make format` | `ruff format` + `ruff check --fix` |
-| `make lint` | `ruff check` |
-| `make typecheck` | `mypy src` (strict) |
-| `make test` | `pytest` |
-| `make coverage` | `pytest --cov` |
+| `make sync` | alias for `install` |
+| `make format` | `ruff format` + `ruff check --fix` (src, tests, scripts) |
+| `make lint` | `ruff check` + `ruff format --check` (src, tests, scripts) |
+| `make typecheck` | `mypy src scripts` (strict) |
+| `make test` | `uv run pytest` |
+| `make coverage` | `pytest --cov=kestrel --cov-report=term-missing` |
 | `make check` | lint + typecheck + test |
 | `make clean` | remove caches/artifacts |
 
