@@ -7,6 +7,8 @@ loadable.
 """
 
 import json
+import subprocess
+import sys
 from pathlib import Path
 from unittest.mock import patch
 
@@ -22,7 +24,8 @@ from kestrel.corpus.config import (
     LocalSourceConfig,
 )
 
-CONFIGS = Path(__file__).resolve().parents[1] / "configs"
+REPO_ROOT = Path(__file__).resolve().parents[1]
+CONFIGS = REPO_ROOT / "configs"
 
 
 def _write(tmp_path: Path, name: str, body: str) -> Path:
@@ -199,6 +202,7 @@ def test_build_local_default_jsonl_preserves_documents(tmp_path):
         total_bytes=1000,
         output_dir=str(out_dir),
         val_fraction=0.0,
+        min_component_fill=0.0,
         components=[_local_component("a", str(pa))],
     )
     build(cfg)
@@ -219,6 +223,7 @@ def test_build_local_assembles_mix(tmp_path):
         total_bytes=1000,
         output_dir=str(out_dir),
         val_fraction=0.0,
+        min_component_fill=0.0,
         components=[
             _local_component("a", str(pa), 0.5),
             _local_component("b", str(pb), 0.3),
@@ -242,6 +247,7 @@ def test_build_local_exhausted_source(tmp_path):
         total_bytes=1000,
         output_dir=str(out_dir),
         val_fraction=0.0,
+        min_component_fill=0.0,
         components=[_local_component("a", str(pa))],
     )
     results = build(cfg)
@@ -258,6 +264,7 @@ def test_build_local_jsonl_preserves_multiline_document(tmp_path):
         total_bytes=1000,
         output_dir=str(out_dir),
         val_fraction=0.0,
+        min_component_fill=0.0,
         components=[_local_component("a", str(pa))],
     )
     build(cfg)
@@ -275,6 +282,7 @@ def test_build_local_txt_output_is_legacy(tmp_path):
         output_dir=str(out_dir),
         output_format="txt",
         val_fraction=0.0,
+        min_component_fill=0.0,
         components=[_local_component("a", str(pa))],
     )
     build(cfg)
@@ -291,6 +299,7 @@ def test_build_hf_jsonl_preserves_multiline_document(tmp_path):
         total_bytes=1000,
         output_dir=str(out_dir),
         val_fraction=0.0,
+        min_component_fill=0.0,
         components=[
             ComponentConfig(
                 name="web",
@@ -317,6 +326,7 @@ def test_build_hf_streams_to_target(tmp_path):
         total_bytes=1,
         output_dir=str(out_dir),
         val_fraction=0.0,
+        min_component_fill=0.0,
         components=[
             ComponentConfig(
                 name="web",
@@ -343,6 +353,7 @@ def test_build_hf_jsonl_when_no_text_field(tmp_path):
         total_bytes=1000,
         output_dir=str(out_dir),
         val_fraction=0.0,
+        min_component_fill=0.0,
         components=[
             ComponentConfig(
                 name="jsonl",
@@ -374,6 +385,7 @@ def test_manifest_counts_and_estimated_tokens(tmp_path):
         total_bytes=100000,
         output_dir=str(out_dir),
         val_fraction=0.3,
+        min_component_fill=0.0,
         components=[_local_component("a", str(pa))],
     )
     build(cfg)
@@ -403,6 +415,7 @@ def test_split_no_leakage_and_complete(tmp_path):
         total_bytes=100000,
         output_dir=str(out_dir),
         val_fraction=0.3,
+        min_component_fill=0.0,
         components=[_local_component("a", str(pa))],
     )
     build(cfg)
@@ -421,6 +434,7 @@ def test_split_deterministic(tmp_path):
             total_bytes=100000,
             output_dir=str(out),
             val_fraction=0.3,
+            min_component_fill=0.0,
             components=[_local_component("a", str(pa))],
         )
         build(cfg)
@@ -440,6 +454,7 @@ def test_split_ratio_approx(tmp_path):
         total_bytes=1000000,
         output_dir=str(out_dir),
         val_fraction=0.25,
+        min_component_fill=0.0,
         components=[_local_component("a", str(pa))],
     )
     build(cfg)
@@ -458,6 +473,7 @@ def test_test_split_carved_out(tmp_path):
         output_dir=str(out_dir),
         val_fraction=0.1,
         test_fraction=0.1,
+        min_component_fill=0.0,
         components=[_local_component("a", str(pa))],
     )
     build(cfg)
@@ -478,6 +494,7 @@ def test_no_test_dir_when_zero(tmp_path):
         output_dir=str(out_dir),
         val_fraction=0.5,
         test_fraction=0.0,
+        min_component_fill=0.0,
         components=[_local_component("a", str(pa))],
     )
     build(cfg)
@@ -496,6 +513,7 @@ def _idempotent_fixture(tmp_path: Path) -> tuple[Path, CorpusConfig]:
         total_bytes=1000,
         output_dir=str(out_dir),
         val_fraction=0.5,
+        min_component_fill=0.0,
         components=[_local_component("a", str(pa))],
     )
     return out_dir, cfg
@@ -565,3 +583,69 @@ def test_build_force_rebuilds_existing_corpus(tmp_path):
         build(cfg, force=True)
 
     mock.assert_called()
+
+
+# --- builder: min_component_fill guard ---
+
+
+def test_build_raises_when_component_below_min_fill(tmp_path):
+    pa = _write(tmp_path, "a.txt", "a\nb\nc\n")
+    out_dir = tmp_path / "out"
+    cfg = CorpusConfig(
+        total_bytes=1000,
+        output_dir=str(out_dir),
+        val_fraction=0.0,
+        components=[_local_component("a", str(pa))],
+    )
+
+    with pytest.raises(ValueError, match="component 'a'"):
+        build(cfg)
+
+
+def test_build_succeeds_when_min_component_fill_is_zero(tmp_path):
+    pa = _write(tmp_path, "a.txt", "a\nb\nc\n")
+    out_dir = tmp_path / "out"
+    cfg = CorpusConfig(
+        total_bytes=1000,
+        output_dir=str(out_dir),
+        val_fraction=0.0,
+        min_component_fill=0.0,
+        components=[_local_component("a", str(pa))],
+    )
+
+    results = build(cfg)
+    assert results["a"] == (out_dir / "train" / "a.jsonl").stat().st_size
+
+
+# --- builder: CLI ---
+
+
+def test_build_corpus_cli_builds_tiny_corpus(tmp_path):
+    pa = _write(tmp_path, "a.txt", "alpha\nbeta\n")
+    out_dir = tmp_path / "out"
+    config_path = tmp_path / "corpus.yaml"
+    config_path.write_text(
+        "total_bytes: 1000\n"
+        "output_dir: " + str(out_dir) + "\n"
+        "val_fraction: 0.0\n"
+        "min_component_fill: 0.0\n"
+        "components:\n"
+        "  - name: a\n"
+        "    fraction: 1.0\n"
+        "    source:\n"
+        "      type: local\n"
+        "      path: " + str(pa) + "\n",
+        encoding="utf-8",
+    )
+
+    proc = subprocess.run(
+        [sys.executable, "scripts/build_corpus.py", "--config", str(config_path)],
+        cwd=REPO_ROOT,
+        capture_output=True,
+        text=True,
+        check=True,
+    )
+
+    assert "a: " in proc.stdout
+    assert (out_dir / "train" / "manifest.json").exists()
+    assert (out_dir / "train" / "a.jsonl").exists()

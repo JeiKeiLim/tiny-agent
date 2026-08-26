@@ -1,35 +1,38 @@
 # Pretraining corpus (plan §8). Loaded into kestrel.corpus.config.CorpusConfig.
 #
-# Document-level corpus: stream the same HF sources used for tokenizer training
-# and write one JSON document per physical line. total_bytes is the raw-text
-# budget; the dataset step's total_tokens is the authoritative training cap.
-total_bytes: 1073741824  # ~1 GB
+# Expanded 12GiB document-level corpus. total_bytes is the raw-text budget;
+# pretrain total_tokens is the authoritative training cap. tokenizer_path stays
+# null so corpus builds use fast estimated token counts.
+#
+# Temporary layout: the built corpus is currently in data/corpus-12g. The
+# canonical cleanup is to rename it to data/corpus after the active pretrain
+# run is killed, then update this output_dir and tests/test_pretrain.py.
+total_bytes: 13212000000
 seed: 0
-output_dir: data/corpus
-# jsonl = one physical line is one document; internal newlines stay in `text`.
+output_dir: data/corpus-12g
 output_format: jsonl
-# Set to checkpoints/tokenizer/tokenizer.json for exact manifest token counts.
 tokenizer_path: null
-# Deterministic per-document hash split (seeded by `seed`): held-out validation slice
-# for in-loop val loss / perplexity, same distribution as train. test_fraction 0 =
-# no separate test slice (pretrain "test" is the downstream eval, not a held-out set).
-val_fraction: 0.1
+val_fraction: 0.01
 test_fraction: 0.0
+min_component_fill: 0.9
 components:
   - name: web
     fraction: 0.85
     source:
       type: hf
-      dataset: HuggingFaceFW/fineweb-edu
+      dataset: HuggingFaceTB/smollm-corpus
+      config: fineweb-edu-dedup
       text_field: text
   - name: code
     fraction: 0.10
     source:
       type: hf
-      dataset: theothertom/codeparrot-python-only
-      text_field: code
-  - name: jsonl
+      dataset: codeparrot/codeparrot-train-more-filtering
+      text_field: content
+  - name: synthetic
     fraction: 0.05
     source:
       type: hf
-      dataset: tatsu-lab/alpaca
+      dataset: HuggingFaceTB/smollm-corpus
+      config: cosmopedia-v2
+      text_field: text

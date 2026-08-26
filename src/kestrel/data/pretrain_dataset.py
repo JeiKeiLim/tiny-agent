@@ -18,14 +18,17 @@ next. The scheduler tracks emitted tokens per source, not documents or bytes.
 
 from __future__ import annotations
 
+import hashlib
 import json
 import math
 import random
+from array import array
 from collections.abc import Generator, Iterator, Sequence
 from dataclasses import dataclass
 from pathlib import Path
 
 import mlx.core as mx
+import numpy as np
 from tokenizers import Tokenizer
 
 from kestrel.common.config import BaseConfig
@@ -75,22 +78,49 @@ def _document_text(row: object) -> str:
     return json.dumps(row, ensure_ascii=False)
 
 
-def _iter_documents(path: Path) -> Generator[str]:
-    """Yield document texts from a ``.jsonl`` file or legacy ``.txt`` file."""
-    if path.suffix == ".jsonl":
-        with path.open("r", encoding="utf-8") as fin:
-            for line in fin:
-                line = line.strip()
-                if not line:
+def _line_offsets(path: Path) -> np.ndarray:
+    """Collect byte offsets for non-blank physical lines in a corpus file."""
+    offsets = array("Q")
+    offset = 0
+    with path.open("rb") as fin:
+        while True:
+            line = fin.readline()
+            if not line:
+                break
+            if line not in (b"\n", b"\r\n"):
+                offsets.append(offset)
+            offset += len(line)
+    return np.frombuffer(offsets, dtype=np.uint64).copy()
+
+
+def _source_shuffle_seed(config_seed: int, domain: str) -> int:
+    """Derive a stable per-source shuffle seed from the dataset seed."""
+    digest = hashlib.sha256(f"{config_seed}:{domain}".encode()).digest()
+    return int.from_bytes(digest[:8], "big")
+
+
+def _iter_documents_shuffled(path: Path, seed: int) -> Generator[str]:
+    """Yield document texts from a corpus file in deterministic shuffled order.
+
+    Only physical line offsets are stored in memory; document text is read by
+    seeking to each shuffled offset.
+    """
+    offsets = _line_offsets(path)
+    if offsets.size:
+        np.random.default_rng(seed).shuffle(offsets)
+
+    is_jsonl = path.suffix == ".jsonl"
+    with path.open("rb") as fin:
+        for offset in offsets:
+            fin.seek(int(offset))
+            line = fin.readline().decode("utf-8")
+            if is_jsonl:
+                line = line.rstrip("\n")
+                if not line.strip():
                     continue
                 text = _document_text(json.loads(line))
-                if text.strip():
-                    yield text
-        return
-
-    with path.open("r", encoding="utf-8") as fin:
-        for line in fin:
-            text = line.rstrip("\r\n")
+            else:
+                text = line.rstrip("\r\n")
             if text.strip():
                 yield text
 
@@ -290,7 +320,8 @@ class PretrainDataset:
                 source = sources[index]
                 iterator = iterators[index]
                 if iterator is None:
-                    iterator = _iter_documents(source.path)
+                    seed = _source_shuffle_seed(self.config.seed, source.domain)
+                    iterator = _iter_documents_shuffled(source.path, seed)
                     iterators[index] = iterator
                 try:
                     text = next(iterator)

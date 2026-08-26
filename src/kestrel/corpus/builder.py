@@ -446,5 +446,14 @@ def build(config: CorpusConfig, force: bool = False) -> dict[str, int]:
                 tokenizer,
             )
         print(f"[{comp.name}] wrote {results[comp.name] / _MB:.1f} MB -> {out_dir}", flush=True)
+        minimum = target * config.min_component_fill
+        if results[comp.name] < minimum:
+            msg = (
+                f"component '{comp.name}' (source: {origin}) wrote "
+                f"{results[comp.name]} bytes, below the minimum fill of "
+                f"{minimum:.0f} bytes ({config.min_component_fill:.0%} of "
+                f"target {target} bytes)"
+            )
+            raise ValueError(msg)
     _write_manifests(out_dir, config, stats)
     return results

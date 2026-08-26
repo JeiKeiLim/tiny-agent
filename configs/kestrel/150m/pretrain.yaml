@@ -1,9 +1,10 @@
-# Kestrel-150M pretrain (plan §6, build-order step 1). Loaded into
+# Kestrel-150M pretrain on the expanded 12GiB corpus. Loaded into
 # kestrel.train.pretrain.PretrainConfig.
 #
 # Single-pass by design: total_tokens is null, so the run trains until the
-# corpus is exhausted (no multi-epoch). num_steps <= 0 disables the step cap;
-# the LR horizon is derived from the corpus manifest's estimated step count.
+# 12GiB train split is exhausted (no multi-epoch). num_steps <= 0 disables the
+# step cap; the LR horizon is derived from the corpus manifest's estimated step
+# count.
 #
 # betas is intentionally unset: TrainerConfig defaults to (0.9, 0.95).
 model: configs/kestrel/150m/model.yaml

@@ -1,9 +1,11 @@
 ---
 id: TASK-005.10.02
 title: 'PretrainDataset: deterministic document shuffle for corpus JSONL files'
-status: To Do
-assignee: []
+status: Done
+assignee:
+  - '@limjk'
 created_date: '2026-08-26 01:35'
+updated_date: '2026-08-26 02:31'
 labels:
   - data
   - pretraining
@@ -53,9 +55,27 @@ Gate: make check green.
 
 ## Acceptance Criteria
 <!-- AC:BEGIN -->
-- [ ] #1 PretrainDataset no longer consumes a multi-doc JSONL file in raw file order
-- [ ] #2 The same dataset seed produces the same document order across runs
-- [ ] #3 All documents are emitted exactly once
-- [ ] #4 Single-file and directory corpus inputs still work
-- [ ] #5 make check is green
+- [x] #1 PretrainDataset no longer consumes a multi-doc JSONL file in raw file order
+- [x] #2 The same dataset seed produces the same document order across runs
+- [x] #3 All documents are emitted exactly once
+- [x] #4 Single-file and directory corpus inputs still work
+- [x] #5 make check is green
 <!-- AC:END -->
+
+## Implementation Plan
+
+<!-- SECTION:PLAN:BEGIN -->
+1. Add line-offset scanning for .jsonl/.txt corpus files using 64-bit offsets. 2. Add deterministic per-source shuffle seed derived from config.seed + source.domain. 3. Add _iter_documents_shuffled() that shuffles offsets and reads lines by seeking while preserving existing JSONL/txt parsing behavior. 4. Use the shuffled iterator in PretrainDataset.__iter__. 5. Add tests for non-raw order, same-seed reproducibility, exactly-once document emission, and directory input. 6. Run make check.
+<!-- SECTION:PLAN:END -->
+
+## Implementation Notes
+
+<!-- SECTION:NOTES:BEGIN -->
+Implemented deterministic per-file document shuffle using 64-bit physical line offsets and numpy RNG. Per-source seed is derived from config.seed + source.domain. PretrainDataset.__iter__ now uses _iter_documents_shuffled. Added tests for non-raw order, same-seed reproducibility, exactly-once emission, and directory total_tokens behavior. make check passed with 116 tests.
+<!-- SECTION:NOTES:END -->
+
+## Final Summary
+
+<!-- SECTION:FINAL_SUMMARY:BEGIN -->
+Added deterministic per-file document shuffle to PretrainDataset while preserving token-deficit mixing and doc_id assignment. Verified with shuffle regression tests and make check (116 tests passed).
+<!-- SECTION:FINAL_SUMMARY:END -->

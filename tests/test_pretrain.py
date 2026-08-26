@@ -8,6 +8,7 @@ a train and a val slice, while staying highly repetitive so the tiny model can
 drive the loss down in a few dozen steps.
 """
 
+import json
 import math
 from pathlib import Path
 
@@ -17,6 +18,7 @@ from pydantic import ValidationError
 
 from kestrel.common.config import load_config
 from kestrel.corpus.config import ComponentConfig, CorpusConfig, LocalSourceConfig
+from kestrel.data.pretrain_dataset import PretrainDataset, PretrainDatasetConfig
 from kestrel.model.config import ModelConfig
 from kestrel.tokenizer.config import TokenizerConfig
 from kestrel.tokenizer.train import train as train_tokenizer
@@ -72,6 +74,7 @@ def _tiny_pretrain_config(tmp_path: Path, tok: Path, num_steps: int = 30) -> Pre
         output_dir=str(tmp_path / "corpus_out"),
         val_fraction=0.1,
         test_fraction=0.0,
+        min_component_fill=0.0,
         components=[
             ComponentConfig(
                 name="web",
@@ -136,6 +139,64 @@ def test_pretrain_config_strict() -> None:
 
 def test_50m_pretrain_yaml_loads() -> None:
     config = load_config("configs/kestrel/50m/pretrain.yaml", PretrainConfig)
+    assert config.corpus == "configs/kestrel/corpus.yaml"
+    assert config.total_tokens == 1013504000
+    assert config.trainer.batch_size == 8
     assert config.trainer.seq_len == 1024
     assert config.trainer.num_steps == 0
-    assert config.total_tokens is None  # single pass
+    assert config.trainer.save_every == 2000
+    assert config.trainer.output_dir == "checkpoints/pretrain/50m"
+
+
+def test_150m_pretrain_yaml_loads() -> None:
+    config = load_config("configs/kestrel/150m/pretrain.yaml", PretrainConfig)
+    assert config.corpus == "configs/kestrel/corpus.yaml"
+    assert config.total_tokens is None
+    assert config.trainer.batch_size == 4
+    assert config.trainer.seq_len == 1024
+    assert config.trainer.num_steps == 0
+    assert config.trainer.save_every == 2000
+    assert config.trainer.output_dir == "checkpoints/pretrain/150m"
+
+
+CORPUS_12G_TRAIN_MANIFEST = Path("data/corpus-12g/train/manifest.json")
+TOKENIZER_PATH = Path("checkpoints/tokenizer/tokenizer.json")
+
+
+@pytest.mark.skipif(
+    not CORPUS_12G_TRAIN_MANIFEST.exists() or not TOKENIZER_PATH.exists(),
+    reason="data/corpus-12g and the trained tokenizer are not present",
+)
+def test_12g_150m_estimated_steps_matches_manifest() -> None:
+    manifest = json.loads(CORPUS_12G_TRAIN_MANIFEST.read_text(encoding="utf-8"))
+    dataset = PretrainDataset(
+        PretrainDatasetConfig(
+            input="data/corpus-12g/train",
+            tokenizer_path=str(TOKENIZER_PATH),
+            context_length=1024,
+            batch_size=4,
+            total_tokens=None,
+            seed=0,
+        )
+    )
+    expected = manifest["total_estimated_token_count"] // (4 * 1024)
+    assert abs(dataset.estimated_steps() - expected) / expected < 0.05
+
+
+@pytest.mark.skipif(
+    not CORPUS_12G_TRAIN_MANIFEST.exists() or not TOKENIZER_PATH.exists(),
+    reason="data/corpus-12g and the trained tokenizer are not present",
+)
+def test_12g_50m_estimated_steps_uses_token_cap() -> None:
+    dataset = PretrainDataset(
+        PretrainDatasetConfig(
+            input="data/corpus-12g/train",
+            tokenizer_path=str(TOKENIZER_PATH),
+            context_length=1024,
+            batch_size=8,
+            total_tokens=1013504000,
+            seed=0,
+        )
+    )
+    expected = 1013504000 // (8 * 1024)
+    assert abs(dataset.estimated_steps() - expected) / expected < 0.05

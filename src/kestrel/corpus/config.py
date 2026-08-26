@@ -65,6 +65,11 @@ class CorpusConfig(BaseConfig):
     ``output_format="txt"`` is a legacy fallback where one physical line is one
     document. ``tokenizer_path`` optionally enables exact token counts in the
     per-split ``manifest.json`` files.
+
+    ``min_component_fill`` is the minimum fraction of a component's byte target
+    that must be written before the build is accepted. Large builds should keep
+    the default so an exhausted source fails loudly instead of silently
+    shrinking the corpus.
     """
 
     total_bytes: int = Field(gt=0)
@@ -74,6 +79,7 @@ class CorpusConfig(BaseConfig):
     tokenizer_path: str | None = None
     val_fraction: float = Field(ge=0.0, le=1.0, default=0.1)
     test_fraction: float = Field(ge=0.0, le=1.0, default=0.0)
+    min_component_fill: float = Field(ge=0.0, le=1.0, default=0.9)
     components: list[ComponentConfig] = Field(min_length=1)
 
     @model_validator(mode="after")

@@ -1,10 +1,11 @@
 ---
 id: TASK-005.10
 title: Expanded ~12GiB pretraining corpus for 150M Chinchilla-scale run
-status: To Do
-assignee: []
+status: In Progress
+assignee:
+  - '@limjk'
 created_date: '2026-08-26 01:35'
-updated_date: '2026-08-26 02:15'
+updated_date: '2026-08-26 04:28'
 labels:
   - data
   - pretraining
@@ -54,11 +55,22 @@ Child tasks cover builder safety, deterministic dataset shuffle, the 12GiB corpu
 - [ ] #6 make check is green
 <!-- AC:END -->
 
+## Implementation Plan
+
+<!-- SECTION:PLAN:BEGIN -->
+1. Complete TASK-005.10.01: corpus builder CLI + source-exhaustion guard. 2. Complete TASK-005.10.02: deterministic per-file document shuffle in PretrainDataset. 3. Complete TASK-005.10.03: create and build data/corpus-12g. 4. Complete TASK-005.10.04: add 12GiB pretrain configs and run short validation. 5. Verify parent ACs and keep existing data/corpus unchanged.
+<!-- SECTION:PLAN:END -->
+
 ## Comments
 
 <!-- COMMENTS:BEGIN -->
 created: 2026-08-26 02:15
 ---
 2026-08-26: Changed planned val_fraction from 0.1 to 0.01 after reviewing eval_iters usage; 10% validation is unnecessarily expensive in training data.
+---
+
+created: 2026-08-26 04:28
+---
+Future-note: the 12GiB corpus is currently stored in data/corpus-12g while configs/kestrel/corpus.yaml is the only corpus config. The long-term canonical layout is data/corpus. Rename and update output_dir/tests after the active pretrain run is killed.
 ---
 <!-- COMMENTS:END -->

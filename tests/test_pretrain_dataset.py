@@ -396,3 +396,76 @@ def test_repeated_iteration_multi_file_after_early_stop(
     second_batch = next(iter(dataset))
     assert second_batch[0].shape == (1, 8)
     assert second_batch[0].tolist() == first_batch[0].tolist()
+
+
+# --- deterministic per-file document shuffle ---
+
+
+def _write_marker_corpus(base: Path, words: list[str]) -> Path:
+    base.mkdir(parents=True)
+    data = base / "data.jsonl"
+    _write_jsonl(data, [f"{word} " * 10 for word in words])
+    return data
+
+
+def _decoded_marker_order(data: Path, tok: Path, seed: int) -> str:
+    decoder = Tokenizer.from_file(str(tok))
+    docs = [json.loads(line)["text"] for line in data.read_text(encoding="utf-8").splitlines()]
+    total_tokens = sum(2 + len(decoder.encode(doc, add_special_tokens=False).ids) for doc in docs)
+    dataset = PretrainDataset(
+        _config(data, tok, batch_size=1, context_length=total_tokens, seed=seed)
+    )
+    batches = list(dataset)
+    assert len(batches) == 1
+    return decoder.decode(batches[0][0][0].tolist())
+
+
+def test_shuffled_document_order_is_not_raw_file_order(
+    tmp_path: Path, tiny_tokenizer: Path
+) -> None:
+    tok = tiny_tokenizer
+    words = [f"marker{index:02d}" for index in range(10)]
+    data = _write_marker_corpus(tmp_path / "data", words)
+    decoded = _decoded_marker_order(data, tok, seed=0)
+
+    positions = [decoded.index(word) for word in words]
+    assert len(positions) == len(words)
+    assert positions != sorted(positions)
+
+
+def test_shuffled_document_order_is_deterministic_for_same_seed(
+    tmp_path: Path, tiny_tokenizer: Path
+) -> None:
+    tok = tiny_tokenizer
+    words = [f"marker{index:02d}" for index in range(10)]
+    first_data = _write_marker_corpus(tmp_path / "first", words)
+    second_data = _write_marker_corpus(tmp_path / "second", words)
+
+    first = _decoded_marker_order(first_data, tok, seed=123)
+    second = _decoded_marker_order(second_data, tok, seed=123)
+    assert first == second
+
+
+def test_shuffled_iteration_emits_all_documents_exactly_once(
+    tmp_path: Path, tiny_tokenizer: Path
+) -> None:
+    tok = tiny_tokenizer
+    words = [f"marker{index:02d}" for index in range(10)]
+    data = _write_marker_corpus(tmp_path / "data", words)
+    decoded = _decoded_marker_order(data, tok, seed=7)
+
+    for word in words:
+        assert decoded.count(word) == 10
+
+
+def test_shuffled_directory_input_respects_total_tokens(
+    tmp_path: Path, tiny_tokenizer: Path
+) -> None:
+    tok = tiny_tokenizer
+    d = tmp_path / "data"
+    d.mkdir()
+    _write_jsonl(d / "a.jsonl", ["alpha " * 20])
+    _write_jsonl(d / "b.jsonl", ["beta " * 20])
+    dataset = PretrainDataset(_config(d, tok, batch_size=1, context_length=8, total_tokens=8))
+
+    assert len(list(dataset)) == 1

@@ -1,9 +1,11 @@
 ---
 id: TASK-005.10.01
 title: 'Corpus builder: CLI + source-exhaustion guard for large builds'
-status: To Do
-assignee: []
+status: Done
+assignee:
+  - '@limjk'
 created_date: '2026-08-26 01:35'
+updated_date: '2026-08-26 02:29'
 labels:
   - data
   - pretraining
@@ -52,9 +54,27 @@ Gate: make check green.
 
 ## Acceptance Criteria
 <!-- AC:BEGIN -->
-- [ ] #1 scripts/build_corpus.py --config <tiny local corpus config> builds the corpus and prints per-component byte counts
-- [ ] #2 build() raises a clear error when a component writes less than min_component_fill of its target bytes
-- [ ] #3 build() succeeds for an intentionally small local source when min_component_fill is 0
-- [ ] #4 Existing idempotent corpus skip behavior still passes
-- [ ] #5 make check is green
+- [x] #1 scripts/build_corpus.py --config <tiny local corpus config> builds the corpus and prints per-component byte counts
+- [x] #2 build() raises a clear error when a component writes less than min_component_fill of its target bytes
+- [x] #3 build() succeeds for an intentionally small local source when min_component_fill is 0
+- [x] #4 Existing idempotent corpus skip behavior still passes
+- [x] #5 make check is green
 <!-- AC:END -->
+
+## Implementation Plan
+
+<!-- SECTION:PLAN:BEGIN -->
+1. Add CorpusConfig.min_component_fill with default 0.9. 2. In build(), after each component, raise ValueError if written bytes are below min_component_fill * target. 3. Create scripts/build_corpus.py with --config and optional --force, call build(), and print per-component byte counts. 4. Update existing tiny-source tests to set min_component_fill=0 where needed. 5. Add tests for failure, success with min_component_fill=0, CLI build, and idempotent skip. 6. Run make check.
+<!-- SECTION:PLAN:END -->
+
+## Implementation Notes
+
+<!-- SECTION:NOTES:BEGIN -->
+Added CorpusConfig.min_component_fill (default 0.9), build() guard, and scripts/build_corpus.py. Updated existing tiny-source tests to min_component_fill=0. Added failure, zero-fill success, and CLI regression tests. make check passed with 112 tests.
+<!-- SECTION:NOTES:END -->
+
+## Final Summary
+
+<!-- SECTION:FINAL_SUMMARY:BEGIN -->
+Added a corpus build CLI and a min_component_fill guard so large builds fail loudly when a source is exhausted. Verified with new corpus-builder/CLI tests and make check (112 tests passed).
+<!-- SECTION:FINAL_SUMMARY:END -->
