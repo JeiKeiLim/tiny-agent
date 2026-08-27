@@ -50,7 +50,7 @@ def generate(
         if temp <= 0.0:
             next_id = cast(int, mx.argmax(last).item())
         else:
-            next_id = cast(int, mx.random.categorical(mx.softmax(last / temp)).item())
+            next_id = cast(int, mx.random.categorical(last / temp).item())
 
         if stop_token_id is not None and next_id == stop_token_id:
             break

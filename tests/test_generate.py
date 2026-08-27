@@ -9,6 +9,7 @@ token sequence is needed (exact max_tokens count, EOS early-stop).
 from collections.abc import Callable
 
 import mlx.core as mx
+import pytest
 from tokenizers import Tokenizer
 from tokenizers.models import WordLevel
 from tokenizers.pre_tokenizers import Whitespace
@@ -89,3 +90,28 @@ def test_generate_sampling_runs() -> None:
     tok = _tiny_tokenizer()
     out = generate(_tiny_model(), tok, "a b", max_tokens=3, temp=1.0)
     assert isinstance(out, str)
+
+
+def test_generate_sampling_passes_scaled_logits_to_categorical(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    tok = _tiny_tokenizer()
+    base = _tiny_model()
+    captured_logits: list[mx.array] = []
+    categorical_inputs: list[mx.array] = []
+
+    def model(x: mx.array) -> mx.array:
+        logits = base(x)
+        captured_logits.append(logits[0, -1, :])
+        return logits
+
+    def fake_categorical(logits: mx.array) -> mx.array:
+        categorical_inputs.append(logits)
+        return mx.array(1)
+
+    monkeypatch.setattr("mlx.core.random.categorical", fake_categorical)
+    generate(model, tok, "a b", max_tokens=1, temp=0.5)
+
+    assert len(captured_logits) == 1
+    assert len(categorical_inputs) == 1
+    assert bool(mx.allclose(categorical_inputs[0], captured_logits[0] / 0.5).item())
