@@ -38,6 +38,7 @@ Kestrel trains a **pair of small decoder-only models (50M and 150M)** from scrat
 - **Pretrain dataset** — JSONL documents → tokenized `(input, target)` batches with document-aware mixing (`data/pretrain_dataset.py`).
 - **Trainer** — shared MLX training loop (`train/trainer.py`) with a live `run.jsonl` log, `step_NNNNNN` / `best` / `final` checkpoints, resume from a full checkpoint, and a retention policy.
 - **Pretrain entry point** — `scripts/run_pretrain.py` with `configs/kestrel/50m/pretrain.yaml` and `configs/kestrel/150m/pretrain.yaml`, plus `generate()` (`model/generate.py`) for autoregressive sampling.
+- **Pretrain evaluation** — read-only `scripts/eval_pretrain.py` reports token-weighted held-out loss, perplexity, bits/token, and per-domain loss for saved checkpoints.
 
 **Planned, not yet built:** the later Track A stages (long-context, SFT, RL, serve + agent, eval) and Track B (PEFT/LoRA).
 
@@ -58,8 +59,9 @@ tiny-agent/
     corpus/           # config.py, builder.py (pluggable corpus builder)
     data/             # prepare_tokenizer_data.py, pretrain_dataset.py, tokenizer_data_config.py
     train/            # trainer.py, pretrain.py, checkpoint.py, rl/ (empty)
-    peft/  tools/  env/  agent/  serve/  eval/   # planned (empty packages)
-  scripts/            # build_corpus.py, check_model.py, run_pretrain.py, visualize_tokenizer.py
+    eval/             # pretrain.py (checkpoint evaluation)
+    peft/  tools/  env/  agent/  serve/   # planned (empty packages)
+  scripts/            # build_corpus.py, check_model.py, run_pretrain.py, eval_pretrain.py, visualize_tokenizer.py
   tests/
   data/  checkpoints/ # runtime artifacts (gitignored)
 ```
@@ -145,6 +147,19 @@ uv run python scripts/run_pretrain.py --config configs/kestrel/50m/pretrain.yaml
 ```
 
 Retention: old `step_NNNNNN` dirs are pruned to `keep_latest_checkpoints` (5 in the 50M config); `best` is kept while `keep_best_checkpoint` is true. Weights-only checkpoint dirs (e.g. the archived `checkpoints/pretrain/archive-v0/`) are *not* resumable — resume requires the full checkpoint layout.
+
+### Pretrain checkpoint evaluation
+
+In-loop `val_loss` uses only `eval_iters` batches, so it is a training monitor rather than a final measurement. To evaluate a saved checkpoint over a larger validation sample:
+
+```bash
+uv run python scripts/eval_pretrain.py \
+  --pretrain-config configs/kestrel/50m/pretrain.yaml \
+  --checkpoint checkpoints/pretrain/50m/best \
+  --max-tokens 1000000
+```
+
+The report includes token-weighted loss, perplexity, bits/token, evaluated tokens, and per-domain loss for `web`, `code`, and `synthetic`. `--max-tokens 0` evaluates the full split, `--json` emits machine-readable output, and `--generate` adds fixed greedy samples. Progress is printed to stderr every `--progress-every-tokens` tokens (default 100000, `0` disables) and includes an estimated percentage when the corpus manifest provides token totals, so `--json` stdout stays parseable. The command is read-only and can be run against a complete checkpoint while training continues.
 
 ## Code quality
 

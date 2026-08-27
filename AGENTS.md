@@ -5,8 +5,8 @@ Kestrel is a small-scale, modern **agentic LLM training pipeline** on [MLX](http
 
 ## Status
 
-- **Implemented:** scaffolding + strict YAML→Pydantic config loader, the Kestrel model (`src/kestrel/model/`) with `generate()`, the byte-level BPE tokenizer (`tokenizer/`), the corpus builder (`corpus/`), the document-aware pretrain dataset (`data/pretrain_dataset.py`), the shared MLX trainer (`train/trainer.py`) with checkpoint retention/resume and `run.jsonl` logging, and the pretrain entry point (`scripts/run_pretrain.py`).
-- **Not yet implemented:** long-context, SFT, RL, serve + agent, eval, and Track B (PEFT/LoRA). They are designed in `doc-001` but have no code yet — do not assume their modules, configs, or scripts exist.
+- **Implemented:** scaffolding + strict YAML→Pydantic config loader, the Kestrel model (`src/kestrel/model/`) with `generate()`, the byte-level BPE tokenizer (`tokenizer/`), the corpus builder (`corpus/`), the document-aware pretrain dataset (`data/pretrain_dataset.py`), the shared MLX trainer (`train/trainer.py`) with checkpoint retention/resume and `run.jsonl` logging, the pretrain entry point (`scripts/run_pretrain.py`), and read-only pretrain checkpoint evaluation (`scripts/eval_pretrain.py`).
+- **Not yet implemented:** long-context, SFT, RL, serve + agent, the broader eval scorecard, and Track B (PEFT/LoRA). They are designed in `doc-001` but have no code yet — do not assume their modules, configs, or scripts exist.
 
 ## Stack
 - **Python 3.13**, managed with **uv** (`.venv` + `uv.lock`; some environments need `uv --system-certs` for network).
