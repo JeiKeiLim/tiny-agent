@@ -24,6 +24,20 @@ from tokenizers import Tokenizer
 DEFAULT_STOP_TOKEN = "im_end"
 
 
+def _apply_repetition_penalty(
+    logits: mx.array, generated_ids: list[int], penalty: float
+) -> mx.array:
+    """Penalize logits for previously generated token IDs.
+
+    Uses the common Hugging Face-style rule: positive logits are divided by
+    ``penalty`` and negative logits are multiplied by ``penalty``.
+    """
+    ids = mx.array(sorted(set(generated_ids)), dtype=mx.int32)
+    selected = mx.take(logits, ids)
+    adjusted = mx.where(selected > 0.0, selected / penalty, selected * penalty)
+    return mx.put_along_axis(logits, ids, adjusted, axis=0)
+
+
 def generate(
     model: Callable[[mx.array], mx.array],
     tokenizer: Tokenizer,
@@ -31,6 +45,7 @@ def generate(
     max_tokens: int,
     temp: float = 0.0,
     stop_token_id: int | None = None,
+    repetition_penalty: float = 1.0,
 ) -> str:
     """Generate text by repeatedly sampling the next token.
 
@@ -38,7 +53,14 @@ def generate(
     ``softmax(logits / temp)``. Stops after ``max_tokens`` new tokens or as soon
     as ``stop_token_id`` (default: the tokenizer's ``im_end``/EOS id) is
     produced. Returns the decoded generated text (the prompt is excluded).
+
+    ``repetition_penalty`` is a decoding-side penalty for previously generated
+    token IDs. ``1.0`` disables it; values greater than ``1.0`` make repeated
+    tokens less likely.
     """
+    if repetition_penalty < 1.0:
+        msg = f"repetition_penalty must be >= 1.0, got {repetition_penalty}"
+        raise ValueError(msg)
     if stop_token_id is None:
         stop_token_id = tokenizer.token_to_id(DEFAULT_STOP_TOKEN)
 
@@ -47,6 +69,8 @@ def generate(
 
     for _ in range(max_tokens):
         last = model(x)[0, -1, :]  # (V,) next-token logits
+        if repetition_penalty != 1.0 and generated:
+            last = _apply_repetition_penalty(last, generated, repetition_penalty)
         if temp <= 0.0:
             next_id = cast(int, mx.argmax(last).item())
         else:

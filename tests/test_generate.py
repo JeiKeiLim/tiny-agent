@@ -59,6 +59,18 @@ def _scripted_model(
     return scripted
 
 
+def _fixed_logits_model(logits_by_id: dict[int, float]) -> Callable[[mx.array], mx.array]:
+    """Stub model whose final-position logits are fixed regardless of input."""
+
+    def fixed(x: mx.array) -> mx.array:
+        logits = mx.zeros((1, x.shape[1], V))
+        for token_id, value in logits_by_id.items():
+            logits[0, -1, token_id] = value
+        return logits
+
+    return fixed
+
+
 def test_generate_produces_max_tokens_and_str() -> None:
     tok = _tiny_tokenizer()
     calls: dict[str, int] = {"n": 0}
@@ -115,3 +127,54 @@ def test_generate_sampling_passes_scaled_logits_to_categorical(
     assert len(captured_logits) == 1
     assert len(categorical_inputs) == 1
     assert bool(mx.allclose(categorical_inputs[0], captured_logits[0] / 0.5).item())
+
+
+def test_repetition_penalty_default_is_noop() -> None:
+    tok = _tiny_tokenizer()
+    model = _fixed_logits_model({1: 10.0, 2: 9.0})
+    out_default = generate(model, tok, "a b", max_tokens=3, temp=0.0)
+    out_one = generate(model, tok, "a b", max_tokens=3, temp=0.0, repetition_penalty=1.0)
+    assert out_default == "a a a"
+    assert out_one == out_default
+
+
+def test_repetition_penalty_suppresses_repeated_token_at_temp_zero() -> None:
+    tok = _tiny_tokenizer()
+    model = _fixed_logits_model({1: 10.0, 2: 9.0})
+    out = generate(model, tok, "a b", max_tokens=2, temp=0.0, repetition_penalty=2.0)
+    assert out == "a b"
+
+
+def test_repetition_penalty_does_not_penalize_prompt_tokens() -> None:
+    tok = _tiny_tokenizer()
+    model = _fixed_logits_model({1: 10.0, 2: 9.0})
+    out = generate(model, tok, "a", max_tokens=1, temp=0.0, repetition_penalty=2.0)
+    assert out == "a"
+
+
+def test_repetition_penalty_applies_before_sampling_at_temp_greater_than_zero(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    tok = _tiny_tokenizer()
+    model = _fixed_logits_model({1: 10.0, 2: 9.0})
+    categorical_inputs: list[mx.array] = []
+
+    def fake_categorical(logits: mx.array) -> mx.array:
+        categorical_inputs.append(logits)
+        return mx.array(1)
+
+    monkeypatch.setattr("mlx.core.random.categorical", fake_categorical)
+    generate(model, tok, "a b", max_tokens=2, temp=0.5, repetition_penalty=2.0)
+
+    assert len(categorical_inputs) == 2
+    expected_first = mx.array([0.0, 20.0, 18.0, 0.0, 0.0])
+    expected_second = mx.array([0.0, 10.0, 18.0, 0.0, 0.0])
+    assert bool(mx.allclose(categorical_inputs[0], expected_first).item())
+    assert bool(mx.allclose(categorical_inputs[1], expected_second).item())
+
+
+def test_repetition_penalty_below_one_raises() -> None:
+    tok = _tiny_tokenizer()
+    model = _fixed_logits_model({1: 1.0})
+    with pytest.raises(ValueError, match="repetition_penalty"):
+        generate(model, tok, "a", max_tokens=1, temp=0.0, repetition_penalty=0.5)

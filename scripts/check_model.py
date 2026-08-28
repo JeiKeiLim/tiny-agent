@@ -13,6 +13,7 @@ Usage:
     uv run python scripts/check_model.py --config configs/kestrel/50m/model.yaml
     uv run python scripts/check_model.py --checkpoint checkpoints/pretrain/kestrel-50m
     uv run python scripts/check_model.py --checkpoint ... --generate --max-tokens 256 --temp 0.8
+    uv run python scripts/check_model.py --checkpoint ... --generate --repetition-penalty 1.2
 
 An untrained (random-init) model gives a loss near ln(vocab) (~9.7 for 16k) and
 gibberish top tokens — expected, not a bug.
@@ -106,6 +107,12 @@ def main() -> None:
     parser.add_argument("--generate", action="store_true", help="generate text after the report")
     parser.add_argument("--max-tokens", type=int, default=128, help="maximum tokens to generate")
     parser.add_argument("--temp", type=float, default=0.0, help="sampling temperature (0 = greedy)")
+    parser.add_argument(
+        "--repetition-penalty",
+        type=float,
+        default=1.0,
+        help="HF-style repetition penalty for generated tokens (1.0 = disabled)",
+    )
     args = parser.parse_args()
 
     tokenizer_path = Path(args.tokenizer)
@@ -121,8 +128,18 @@ def main() -> None:
     _print_report(report, args.text)
 
     if args.generate:
-        generated = generate(model, tokenizer, args.text, args.max_tokens, temp=args.temp)
-        print(f"\ngenerated (max_tokens={args.max_tokens}, temp={args.temp}):")
+        generated = generate(
+            model,
+            tokenizer,
+            args.text,
+            args.max_tokens,
+            temp=args.temp,
+            repetition_penalty=args.repetition_penalty,
+        )
+        print(
+            f"\ngenerated (max_tokens={args.max_tokens}, temp={args.temp}, "
+            f"repetition_penalty={args.repetition_penalty}):"
+        )
         print(generated)
 
 
