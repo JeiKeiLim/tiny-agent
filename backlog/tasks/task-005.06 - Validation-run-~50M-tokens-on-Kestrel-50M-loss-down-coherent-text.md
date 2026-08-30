@@ -3,10 +3,10 @@ id: TASK-005.06
 title: >-
   Validation run - full ~275M-token single pass on Kestrel-50M (loss down +
   English-like text)
-status: In Progress
+status: Done
 assignee: []
 created_date: '2026-08-24 01:57'
-updated_date: '2026-08-26 04:33'
+updated_date: '2026-08-30 23:14'
 labels: []
 milestone: m-1
 dependencies:
@@ -38,10 +38,10 @@ Quantitative targets (the M1 gate):
 
 ## Acceptance Criteria
 <!-- AC:BEGIN -->
-- [ ] #1 the full ~275M-token single-pass run completes and the logged loss decreases monotonically (post-warmup) from ~9.7 to well below ~8
-- [ ] #2 generate() from the final checkpoint produces English-like / simple coherent-ish text (not gibberish) on a few prompts (human-verified; capture 2-3 sample outputs as evidence in the task notes)
-- [ ] #3 the final checkpoint is saved and reloads via kestrel.model.io.load
-- [ ] #4 record final loss, tokens/sec, and wall-clock time in the task notes (benchmarks the ~30k tok/s estimate from doc-001 section 2)
+- [x] #1 the full ~275M-token single-pass run completes and the logged loss decreases monotonically (post-warmup) from ~9.7 to well below ~8
+- [x] #2 generate() from the final checkpoint produces English-like / simple coherent-ish text (not gibberish) on a few prompts (human-verified; capture 2-3 sample outputs as evidence in the task notes)
+- [x] #3 the final checkpoint is saved and reloads via kestrel.model.io.load
+- [x] #4 record final loss, tokens/sec, and wall-clock time in the task notes (benchmarks the ~30k tok/s estimate from doc-001 section 2)
 <!-- AC:END -->
 
 ## Implementation Notes
@@ -58,6 +58,8 @@ M1 validation loss caveat: runs using the pre-TASK-005.02.01 PretrainDataset con
 Investigation after 50M full run and 150M partial run: 50M completed 28810 steps with final train loss 1.048 but best val 3.944 at step 25000 and final val 4.588. The late train-loss drop is explained by the current byte-weighted line scheduler: jsonl exhausts early, web exhausts near step 25.8k, and the final ~3k steps are effectively code-only. Generation from 50M step_024000/final and 150M step_022000 is still word salad or repetitive loops. 150M uses batch_size 4, so 40000 steps is only ~164M tokens and stops before corpus exhaustion; it is not a same-token-budget comparison with the 50M run. Conclusion: current outputs are expected for this data budget; the main follow-ups are token-aware domain mixing, a fair 50M/150M token budget, and more pretraining data if coherent generation is the goal.
 
 Root cause update: the weak 50M/150M outputs are not only from undertraining or byte-weighted line mixing. The corpus pipeline flattened HF documents into physical lines. prepare_tokenizer_data.py wrote text + newline, and corpus/builder.py treated physical lines as documents. Current web/code corpus is lossy. Fix is tracked under TASK-005.08: document-level JSONL corpus, manifest, token-aware mixing, doc_ids, document-aware attention, position reset, and auto num_steps.
+
+2026-08-28 M1 validation completed using the 50M 1B-token run on data/corpus-12g. Final checkpoint checkpoints/pretrain/50m/final completed 123,719 steps / 1,013,506,048 tokens. LR schedule reached 0.0. Initial train loss 10.1537, last-100 train mean 3.1463, best/final in-loop val 3.1583. Per-step train loss is noisy rather than strictly monotonic, but the post-warmup trend is clearly downward. External eval on 302,808 held-out val tokens: mixed loss 3.1443, ppl 23.20, bpt 4.536; code loss 1.9249/ppl 6.85, synthetic 2.6949/ppl 14.80, web 3.2953/ppl 26.99. Checkpoint reloads successfully via scripts/check_model.py and scripts/eval_pretrain.py. Approx wall-clock from filesystem metadata: run.jsonl created Aug 26 14:25, final checkpoint Aug 28 13:36 (~47.2h span), average ~5.97k tokens/s including pauses; later checkpoint intervals imply ~7.4k tokens/s. Generation evidence is recorded in TASK-005.14: English-like and code-pattern outputs, with repetition and weak factual reliability expected at 50M/1B.
 <!-- SECTION:NOTES:END -->
 
 ## Comments
@@ -73,3 +75,9 @@ created: 2026-08-26 04:33
 2026-08-26 status: Keep In Progress. The old ~275M data/corpus run should remain classified as a pipeline smoke run, not the final M1 validation result. The current 50M 12GiB Chinchilla-capped run is the active validation attempt, but it cannot truly resume from current weights-only checkpoints if killed. Close this task only after a run completes or after resume support lands and a resumed run completes, with recorded final loss, validation loss, 2-3 generated samples, tokens/sec, wall-clock time, and checkpoint reload evidence.
 ---
 <!-- COMMENTS:END -->
+
+## Final Summary
+
+<!-- SECTION:FINAL_SUMMARY:BEGIN -->
+M1 pretraining validation is complete. The 50M model completed a 1.0135B-token run, reached LR 0, reduced loss from 10.15 to ~3.15 train / 3.158 val, reloads from checkpoints/pretrain/50m/final, and generates English-like/code-pattern text. Quality is adequate for pipeline validation and SFT-base experiments, not general assistant capability.
+<!-- SECTION:FINAL_SUMMARY:END -->

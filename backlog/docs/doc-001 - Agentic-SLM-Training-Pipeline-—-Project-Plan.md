@@ -3,11 +3,11 @@ id: doc-001
 title: Agentic SLM Training Pipeline — Project Plan
 type: specification
 created_date: '2026-08-19 22:12'
-updated_date: '2026-08-21 07:04'
+updated_date: '2026-08-30 23:15'
 ---
 # Agentic SLM Training Pipeline — Project Plan
 
-_Status: Draft / active discussion. No implementation started. This captures the plan and decisions from our discussion so far. Update as we converge. Tasks/milestones will be broken out only after the plan is finalized._
+_Status: Active. M1 pretraining completed on 2026-08-28. The 50M 1B-token validation run is complete; the next pipeline stage is SFT._
 
 ## 1. Vision
 
@@ -20,7 +20,7 @@ Key principle: **small scale, not a degraded approach.** We use the same modern 
 - **Machine:** Apple M4 Pro, 48GB unified memory.
 - **Memory:** Not the constraint. A 150M model is tiny; even a 1B model fits comfortably.
 - **Compute / time:** The real constraint. Pretraining 50M–150M needs far fewer tokens → hours to days (feasible). Pretraining ~1B to competence needs ~10B–20B tokens → weeks to months (not practical).
-- **Throughput (rough, to be benchmarked on the actual machine):** 150M ≈ ~11,000 tok/s; 50M ≈ ~30,000 tok/s.
+- **Throughput (rough estimate):** 150M ≈ ~11,000 tok/s; 50M ≈ ~30,000 tok/s. Measured 50M pretrain on this machine: ~6.0k average tok/s including pauses and ~7.4k near the end of the run (batch=8, seq=1024, 1.0135B tokens, ~47.2h filesystem span).
 
 ## 3. Two-Track Structure
 
@@ -390,5 +390,10 @@ The end result is a **pair of basic small agents** (50M and 150M): simple single
 
 ## 18. Next Steps
 
-- Planning is essentially complete — all stage decisions are locked (§6–§16). **No implementation yet.**
-- Next: break the plan into Backlog tasks/milestones (following the §6 incremental build order).
+- M1 pretraining is complete (TASK-005 / milestone m-1, completed 2026-08-28).
+  - 50M final checkpoint: `checkpoints/pretrain/50m/final`.
+  - Trained tokens: 1,013,506,048.
+  - Held-out validation: mixed loss 3.1443, ppl 23.20 on 302,808 tokens.
+  - Judgment: adequate for pipeline validation and as a 50M SFT experiment base; not a general-capability assistant.
+- Next: implement SFT (dataset, trainer, config, entry point) and run a 50M SFT validation experiment.
+- 150M pretrain remains a later/manual scaling pass; partial 150M checkpoints exist but are not the M1 validation artifact.

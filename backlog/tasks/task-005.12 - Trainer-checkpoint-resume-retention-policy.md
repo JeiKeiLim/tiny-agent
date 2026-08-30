@@ -1,10 +1,10 @@
 ---
 id: TASK-005.12
 title: Trainer checkpoint resume + retention policy
-status: In Progress
+status: Done
 assignee: []
 created_date: '2026-08-26 04:13'
-updated_date: '2026-08-26 04:43'
+updated_date: '2026-08-30 23:14'
 labels:
   - training
   - checkpoint
@@ -44,8 +44,8 @@ The existing 50M run uses save_every: 2000. The user will manage existing disk u
 
 ## Acceptance Criteria
 <!-- AC:BEGIN -->
-- [ ] #1 Child tasks for checkpoint retention and resumable checkpoints are Done
-- [ ] #2 make check is green
+- [x] #1 Child tasks for checkpoint retention and resumable checkpoints are Done
+- [x] #2 make check is green
 <!-- AC:END -->
 
 ## Implementation Plan
@@ -53,3 +53,15 @@ The existing 50M run uses save_every: 2000. The user will manage existing disk u
 <!-- SECTION:PLAN:BEGIN -->
 1. Complete TASK-005.12.01: checkpoint retention + best-val checkpoint. 2. Complete TASK-005.12.02: full resumable training checkpoints. 3. Keep make check green after each subtask. 4. Do not modify the currently running 50M pretrain process; these changes apply to future runs.
 <!-- SECTION:PLAN:END -->
+
+## Implementation Notes
+
+<!-- SECTION:NOTES:BEGIN -->
+2026-08-28: Both child tasks are Done. make check passed on 2026-08-28: ruff check clean, ruff format clean, mypy clean, 165 pytest tests passed.
+<!-- SECTION:NOTES:END -->
+
+## Final Summary
+
+<!-- SECTION:FINAL_SUMMARY:BEGIN -->
+Trainer checkpoint resume + retention is complete via TASK-005.12.01 and TASK-005.12.02. Full checkpoints are self-describing and resumable; retention keeps bounded step checkpoints plus best/final. make check is green.
+<!-- SECTION:FINAL_SUMMARY:END -->
