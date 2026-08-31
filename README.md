@@ -40,7 +40,7 @@ Kestrel trains a **pair of small decoder-only models (50M and 150M)** from scrat
 - **Pretrain entry point** — `scripts/run_pretrain.py` with `configs/kestrel/50m/pretrain.yaml` and `configs/kestrel/150m/pretrain.yaml`, plus `generate()` (`model/generate.py`) for autoregressive sampling.
 - **Pretrain evaluation** — read-only `scripts/eval_pretrain.py` reports token-weighted held-out loss, perplexity, bits/token, and per-domain loss for saved checkpoints.
 
-**Milestone M2 (SFT validation) is partially implemented:** the SFT chat renderer, masked SFT dataset, SFT trainer, and data prep for public assistant, GSM8K, local tool, public tool, and optional internal LLM sources. The internal LLM source is disabled by default and reads endpoint, API key, and model name only from environment variables named in `configs/kestrel/sft_data.yaml`; `.env.example` lists the required variable names, and `.env` is gitignored.
+**Milestone M2 (SFT validation) is partially implemented:** the SFT chat renderer, masked SFT dataset, SFT trainer, raw SFT source prep (`scripts/run_prepare_sft.py`), SFT training entry point (`scripts/run_sft.py`), and interactive SFT chat (`scripts/chat_sft.py`). Data prep supports public assistant, GSM8K, local rule-based tool, public tool, and an optional internal LLM source. The internal LLM source is disabled by default and reads endpoint, API key, and model name only from environment variables named in `configs/kestrel/sft_data.yaml`; `.env.example` lists the required variable names, and `.env` is gitignored.
 
 **Planned, not yet built:** long-context, the full SFT mixture/eval scorecard, RL, serve + agent, and Track B (PEFT/LoRA).
 
@@ -52,18 +52,22 @@ tiny-agent/
     tokenizer/        # train.yaml, train_data.yaml
     kestrel/          # from-scratch (Track A) — family of 2 sizes
       corpus.yaml     # pretrain corpus (output: data/corpus-12g)
-      50m/            # model.yaml, pretrain.yaml
-      150m/           # model.yaml, pretrain.yaml
+      sft_data.yaml   # SFT raw-source data prep
+      50m/            # model.yaml, pretrain.yaml, sft.yaml
+      150m/           # model.yaml, pretrain.yaml, sft.yaml
   src/kestrel/
     common/           # config (YAML→Pydantic), logging
     model/            # config.py, kestrel.py, io.py (load/save), generate.py
     tokenizer/        # config.py, train.py, visualize.py
     corpus/           # config.py, builder.py (pluggable corpus builder)
-    data/             # prepare_tokenizer_data.py, pretrain_dataset.py, tokenizer_data_config.py
-    train/            # trainer.py, pretrain.py, checkpoint.py, rl/ (empty)
+    data/             # tokenizer/pretrain/SFT datasets, chat rendering, SFT source prep
+    train/            # trainer.py, pretrain.py, sft.py, checkpoint.py, rl/ (empty)
+    tools/            # schema_sampler.py
     eval/             # pretrain.py (checkpoint evaluation)
-    peft/  tools/  env/  agent/  serve/   # planned (empty packages)
-  scripts/            # build_corpus.py, check_model.py, run_pretrain.py, eval_pretrain.py, visualize_tokenizer.py
+    peft/  env/  agent/  serve/   # planned (empty packages)
+  scripts/            # build_corpus.py, check_model.py, run_pretrain.py,
+                      # eval_pretrain.py, visualize_tokenizer.py, run_prepare_sft.py,
+                      # run_sft.py, chat_sft.py
   tests/
   data/  checkpoints/ # runtime artifacts (gitignored)
 ```
@@ -162,6 +166,43 @@ uv run python scripts/eval_pretrain.py \
 ```
 
 The report includes token-weighted loss, perplexity, bits/token, evaluated tokens, and per-domain loss for `web`, `code`, and `synthetic`. `--max-tokens 0` evaluates the full split, `--json` emits machine-readable output, and `--generate` adds fixed greedy samples. Progress is printed to stderr every `--progress-every-tokens` tokens (default 100000, `0` disables) and includes an estimated percentage when the corpus manifest provides token totals, so `--json` stdout stays parseable. The command is read-only and can be run against a complete checkpoint while training continues.
+
+### SFT data prep
+
+Raw SFT sources are prepared into `data/sft/raw/` by:
+
+```bash
+uv run python scripts/run_prepare_sft.py --source all
+uv run python scripts/run_prepare_sft.py --source assistant
+uv run python scripts/run_prepare_sft.py --source gsm8k
+uv run python scripts/run_prepare_sft.py --source tool
+uv run python scripts/run_prepare_sft.py --source public_tool
+uv run python scripts/run_prepare_sft.py --source internal_llm
+```
+
+Sources, row targets, and output paths are set in `configs/kestrel/sft_data.yaml`. The internal LLM source is disabled by default; enable it in a local config copy and export the environment variables named in `.env.example` before running it. Progress and drop-debugging behavior are controlled by `internal_llm.progress_every`, `internal_llm.debug_drops`, and `internal_llm.debug_drop_limit`.
+
+The SFT mixture builder that combines raw sources into the final training file is not implemented yet.
+
+### SFT training
+
+The SFT phase loads a pretrain checkpoint and trains on the masked SFT dataset:
+
+```bash
+uv run python scripts/run_sft.py --config configs/kestrel/50m/sft.yaml
+```
+
+The 50M config currently expects the not-yet-built mixture file at `data/sft/mixture/sft-50k.jsonl`, so this command is structurally wired but cannot run end-to-end until the mixture builder produces that file.
+
+### SFT chat
+
+A manual multi-turn chat CLI renders prompts with the same SFT chat template used during training:
+
+```bash
+uv run python scripts/chat_sft.py --checkpoint checkpoints/sft/50m/final
+```
+
+It is for inspection only and does not expose tool calling.
 
 ## Code quality
 
