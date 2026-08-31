@@ -57,9 +57,11 @@ def convert_gsm8k_row(raw: dict[str, Any], source: str) -> SFTRow | None:
         return None
 
 
-def load_gsm8k_rows(dataset_id: str, dataset_config: str, split: str) -> Iterator[dict[str, Any]]:
-    """Stream GSM8K rows from Hugging Face."""
+def load_gsm8k_rows(
+    dataset_id: str, dataset_config: str, split: str, seed: int
+) -> Iterator[dict[str, Any]]:
+    """Stream seeded shuffled GSM8K rows from Hugging Face."""
     from datasets import load_dataset
 
     dataset = load_dataset(dataset_id, name=dataset_config, split=split, streaming=True)
-    return iter(dataset)
+    return iter(dataset.shuffle(seed=seed, buffer_size=10_000))

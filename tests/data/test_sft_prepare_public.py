@@ -150,7 +150,113 @@ def test_prepare_rows_filters_rows_longer_than_context(
     )
 
     assert manifest.written_rows == 1
+    assert manifest.candidate_rows == 2
     assert manifest.filtered_rows == 1
+
+
+def test_prepare_rows_continues_past_filtered_rows_until_target(
+    tmp_path: Path, tiny_sft_tokenizer: Path
+) -> None:
+    rows = [
+        _smol_row(0, assistant_content="hello " * 100),
+        _smol_row(1, assistant_content="hello world"),
+        _smol_row(2, assistant_content="hello " * 100),
+        _smol_row(3, assistant_content="another answer"),
+    ]
+
+    manifest = prepare_rows(
+        source="assistant_public",
+        dataset_id="fixture/smol",
+        split="train",
+        seed=7,
+        target_rows=2,
+        tokenizer_path=str(tiny_sft_tokenizer),
+        context_length=32,
+        output_dir=str(tmp_path),
+        load_rows=lambda: iter(rows),
+        convert_row=lambda raw: convert_smol_row(raw, "assistant_public"),
+    )
+
+    assert manifest.written_rows == 2
+    assert manifest.candidate_rows == 4
+    assert manifest.filtered_rows == 2
+
+
+def test_prepare_rows_stops_after_target_valid_rows(
+    tmp_path: Path, tiny_sft_tokenizer: Path
+) -> None:
+    rows = [_smol_row(index) for index in range(5)]
+
+    manifest = prepare_rows(
+        source="assistant_public",
+        dataset_id="fixture/smol",
+        split="train",
+        seed=7,
+        target_rows=2,
+        tokenizer_path=str(tiny_sft_tokenizer),
+        context_length=64,
+        output_dir=str(tmp_path),
+        load_rows=lambda: iter(rows),
+        convert_row=lambda raw: convert_smol_row(raw, "assistant_public"),
+    )
+
+    assert manifest.written_rows == 2
+    assert manifest.candidate_rows == 2
+    assert manifest.filtered_rows == 0
+
+
+def test_prepare_rows_respects_max_candidate_rows(tmp_path: Path, tiny_sft_tokenizer: Path) -> None:
+    rows = [
+        _smol_row(0, assistant_content="hello world"),
+        _smol_row(1, assistant_content="hello " * 100),
+        _smol_row(2, assistant_content="hello " * 100),
+        _smol_row(3, assistant_content="hello " * 100),
+        _smol_row(4, assistant_content="hello " * 100),
+    ]
+
+    manifest = prepare_rows(
+        source="assistant_public",
+        dataset_id="fixture/smol",
+        split="train",
+        seed=7,
+        target_rows=3,
+        tokenizer_path=str(tiny_sft_tokenizer),
+        context_length=32,
+        output_dir=str(tmp_path),
+        load_rows=lambda: iter(rows),
+        convert_row=lambda raw: convert_smol_row(raw, "assistant_public"),
+        max_candidate_rows=4,
+    )
+
+    assert manifest.written_rows == 1
+    assert manifest.candidate_rows == 4
+    assert manifest.filtered_rows == 3
+
+
+def test_prepare_rows_records_deficit_when_source_exhausts(
+    tmp_path: Path, tiny_sft_tokenizer: Path
+) -> None:
+    rows = [
+        _smol_row(0, assistant_content="hello world"),
+        _smol_row(1, assistant_content="another answer"),
+    ]
+
+    manifest = prepare_rows(
+        source="assistant_public",
+        dataset_id="fixture/smol",
+        split="train",
+        seed=7,
+        target_rows=3,
+        tokenizer_path=str(tiny_sft_tokenizer),
+        context_length=64,
+        output_dir=str(tmp_path),
+        load_rows=lambda: iter(rows),
+        convert_row=lambda raw: convert_smol_row(raw, "assistant_public"),
+    )
+
+    assert manifest.written_rows == 2
+    assert manifest.candidate_rows == 2
+    assert manifest.filtered_rows == 0
 
 
 def test_sft_data_config_is_strict_and_yaml_loads() -> None:
@@ -163,6 +269,7 @@ def test_sft_data_config_is_strict_and_yaml_loads() -> None:
     assert config.output_dir == "data/sft/raw"
     assert config.context_length == 1024
     assert config.assistant.target_rows == 22_500
+    assert config.assistant.max_candidate_rows == 100_000
     assert config.gsm8k.target_rows == 7_500
     assert config.gsm8k.dataset_config == "main"
 

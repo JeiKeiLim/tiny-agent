@@ -44,9 +44,9 @@ def convert_smol_row(raw: dict[str, Any], source: str) -> SFTRow | None:
         return None
 
 
-def load_smol_rows(dataset_id: str, split: str) -> Iterator[dict[str, Any]]:
-    """Stream Smol-SmolTalk rows from Hugging Face."""
+def load_smol_rows(dataset_id: str, split: str, seed: int) -> Iterator[dict[str, Any]]:
+    """Stream seeded shuffled Smol-SmolTalk rows from Hugging Face."""
     from datasets import load_dataset
 
     dataset = load_dataset(dataset_id, split=split, streaming=True)
-    return iter(dataset)
+    return iter(dataset.shuffle(seed=seed, buffer_size=10_000))

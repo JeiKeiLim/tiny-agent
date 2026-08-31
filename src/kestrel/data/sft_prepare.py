@@ -20,6 +20,7 @@ from kestrel.data.sft_internal_llm import (
     create_llm_client,
     generate_internal_llm_rows,
 )
+from kestrel.data.sft_mixture import MixtureConfig
 from kestrel.data.sft_prepare_gsm8k import convert_gsm8k_row, load_gsm8k_rows
 from kestrel.data.sft_prepare_public import convert_smol_row, load_smol_rows
 from kestrel.data.sft_public_tool import PublicToolNormalizer, load_public_tool_rows
@@ -41,6 +42,7 @@ class AssistantSourceConfig(BaseConfig):
     split: str = "train"
     source: str = "assistant_public"
     target_rows: int = Field(default=22_500, gt=0)
+    max_candidate_rows: int | None = Field(default=None, gt=0)
 
 
 class Gsm8kSourceConfig(BaseConfig):
@@ -88,6 +90,7 @@ class SFTDataConfig(BaseConfig):
     tool: ToolSourceConfig = Field(default_factory=ToolSourceConfig)
     public_tool: PublicToolSourceConfig = Field(default_factory=PublicToolSourceConfig)
     internal_llm: InternalLLMConfig = Field(default_factory=InternalLLMConfig)
+    mixture: MixtureConfig | None = None
 
 
 class SourceManifest(BaseConfig):
@@ -169,19 +172,25 @@ def prepare_rows(
     load_rows: Callable[[], Iterator[dict[str, Any]]],
     convert_row: Callable[[dict[str, Any]], SFTRow | None],
     dataset_config: str | None = None,
+    max_candidate_rows: int | None = None,
 ) -> SourceManifest:
-    """Stream, sample, convert, filter, and write one SFT source."""
+    """Stream, convert, filter, and write one SFT source until target rows are valid."""
     tokenizer = Tokenizer.from_file(tokenizer_path)
-    candidates = reservoir_sample(load_rows(), target_rows, seed)
 
     rows: list[SFTRow] = []
+    candidate_rows = 0
     filtered_rows = 0
-    for raw in candidates:
+    for raw in load_rows():
+        if max_candidate_rows is not None and candidate_rows >= max_candidate_rows:
+            break
+        candidate_rows += 1
         row = convert_row(raw)
         if row is None or not _passes_context_filter(row, tokenizer, context_length):
             filtered_rows += 1
             continue
         rows.append(row)
+        if len(rows) == target_rows:
+            break
 
     output_path = Path(output_dir) / f"{source}.jsonl"
     written_rows = _write_jsonl(output_path, rows)
@@ -192,7 +201,7 @@ def prepare_rows(
         split=split,
         seed=seed,
         requested_rows=target_rows,
-        candidate_rows=len(candidates),
+        candidate_rows=candidate_rows,
         written_rows=written_rows,
         filtered_rows=filtered_rows,
         output_path=str(output_path),
@@ -215,8 +224,9 @@ def prepare_assistant(config: SFTDataConfig) -> SourceManifest:
         tokenizer_path=config.tokenizer_path,
         context_length=config.context_length,
         output_dir=config.output_dir,
-        load_rows=lambda: load_smol_rows(source.dataset_id, source.split),
+        load_rows=lambda: load_smol_rows(source.dataset_id, source.split, config.seed),
         convert_row=lambda raw: convert_smol_row(raw, source.source),
+        max_candidate_rows=source.max_candidate_rows,
     )
 
 
@@ -232,7 +242,9 @@ def prepare_gsm8k(config: SFTDataConfig) -> SourceManifest:
         tokenizer_path=config.tokenizer_path,
         context_length=config.context_length,
         output_dir=config.output_dir,
-        load_rows=lambda: load_gsm8k_rows(source.dataset_id, source.dataset_config, source.split),
+        load_rows=lambda: load_gsm8k_rows(
+            source.dataset_id, source.dataset_config, source.split, config.seed
+        ),
         convert_row=lambda raw: convert_gsm8k_row(raw, source.source),
         dataset_config=source.dataset_config,
     )

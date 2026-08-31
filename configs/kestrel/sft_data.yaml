@@ -9,6 +9,7 @@ assistant:
   split: train
   source: assistant_public
   target_rows: 22500
+  max_candidate_rows: 100000
 gsm8k:
   dataset_id: openai/gsm8k
   dataset_config: main
@@ -53,3 +54,22 @@ internal_llm:
   progress_every: 10
   debug_drops: false
   debug_drop_limit: 20
+mixture:
+  input_dir: data/sft/raw
+  output_dir: data/sft/mixture
+  output_name: sft-50k.jsonl
+  seed: 42
+  deficit_policy: allow
+  fallback_when_internal_missing: true
+  recipe:
+    assistant_public: 22500
+    gsm8k_math: 7500
+    tool_local: 10000
+    tool_public: 5000
+    internal_llm: 5000
+  fallback_recipe:
+    assistant_public: 22500
+    gsm8k_math: 7500
+    tool_local: 12500
+    tool_public: 7500
+    internal_llm: 0
