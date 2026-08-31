@@ -16,6 +16,7 @@ from kestrel.common.config import BaseConfig
 from kestrel.data.sft_chat import render_sft
 from kestrel.data.sft_prepare_gsm8k import convert_gsm8k_row, load_gsm8k_rows
 from kestrel.data.sft_prepare_public import convert_smol_row, load_smol_rows
+from kestrel.data.sft_public_tool import PublicToolNormalizer, load_public_tool_rows
 from kestrel.data.sft_schema import SFTRow
 from kestrel.data.sft_tool_generator import (
     ToolEvalBreakdown,
@@ -24,6 +25,7 @@ from kestrel.data.sft_tool_generator import (
     generate_tool_eval,
     generate_tool_train,
 )
+from kestrel.tools.schema_sampler import m2_eval_tool_names
 
 
 class AssistantSourceConfig(BaseConfig):
@@ -55,6 +57,19 @@ class ToolSourceConfig(BaseConfig):
     eval: ToolEvalBreakdown = Field(default_factory=ToolEvalBreakdown)
 
 
+class PublicToolSourceConfig(BaseConfig):
+    """Settings for the public tool-calling SFT source."""
+
+    dataset_id: str = "argilla/apigen-function-calling"
+    split: str = "train"
+    source: str = "tool_public"
+    target_rows: int = Field(default=5_000, gt=0)
+    max_tools: int = Field(default=5, ge=1, le=5)
+    max_query_chars: int = Field(default=512, gt=0)
+    max_tool_chars: int = Field(default=2_048, gt=0)
+    max_list_items: int = Field(default=10, gt=0)
+
+
 class SFTDataConfig(BaseConfig):
     """Strict settings for M2 SFT data preparation."""
 
@@ -65,6 +80,7 @@ class SFTDataConfig(BaseConfig):
     assistant: AssistantSourceConfig = Field(default_factory=AssistantSourceConfig)
     gsm8k: Gsm8kSourceConfig = Field(default_factory=Gsm8kSourceConfig)
     tool: ToolSourceConfig = Field(default_factory=ToolSourceConfig)
+    public_tool: PublicToolSourceConfig = Field(default_factory=PublicToolSourceConfig)
 
 
 class SourceManifest(BaseConfig):
@@ -81,6 +97,7 @@ class SourceManifest(BaseConfig):
     output_path: str
     sha256: str
     dataset_config: str | None = None
+    dropped_rows: int = 0
 
 
 def reservoir_sample(rows: Iterator[dict[str, Any]], k: int, seed: int) -> list[dict[str, Any]]:
@@ -287,7 +304,89 @@ def prepare_tool(config: SFTDataConfig) -> dict[str, SourceManifest]:
     return {manifest.source: manifest for manifest in manifests}
 
 
+def _reservoir_append(
+    reservoir: list[SFTRow], rng: random.Random, count: int, row: SFTRow, k: int
+) -> None:
+    if len(reservoir) < k:
+        reservoir.append(row)
+        return
+    replace_at = rng.randint(0, count - 1)
+    if replace_at < k:
+        reservoir[replace_at] = row
+
+
+def prepare_public_tool(config: SFTDataConfig) -> SourceManifest:
+    """Prepare the public tool-calling source with distilabel rows preferred."""
+    source = config.public_tool
+    normalizer = PublicToolNormalizer(
+        source=source.source,
+        max_tools=source.max_tools,
+        max_query_chars=source.max_query_chars,
+        max_tool_chars=source.max_tool_chars,
+        max_list_items=source.max_list_items,
+        excluded_tool_names=m2_eval_tool_names(),
+    )
+    tokenizer = Tokenizer.from_file(config.tokenizer_path)
+    target_rows = source.target_rows
+    distilabel_rows: list[SFTRow] = []
+    other_rows: list[SFTRow] = []
+    distilabel_count = 0
+    other_count = 0
+    dropped_rows = 0
+    rng_distilabel = random.Random(config.seed)
+    rng_other = random.Random(config.seed + 1)
+
+    for raw in load_public_tool_rows(source.dataset_id, source.split):
+        row = normalizer.convert(raw)
+        if row is None:
+            dropped_rows += 1
+            continue
+        if raw.get("origin") == "distilabel":
+            distilabel_count += 1
+            _reservoir_append(distilabel_rows, rng_distilabel, distilabel_count, row, target_rows)
+        else:
+            other_count += 1
+            _reservoir_append(other_rows, rng_other, other_count, row, target_rows)
+
+    random.Random(config.seed + 2).shuffle(distilabel_rows)
+    random.Random(config.seed + 3).shuffle(other_rows)
+    sampled = distilabel_rows[:target_rows]
+    if len(sampled) < target_rows:
+        sampled.extend(other_rows[: target_rows - len(sampled)])
+
+    kept_rows: list[SFTRow] = []
+    filtered_rows = 0
+    for row in sampled:
+        if _passes_context_filter(row, tokenizer, config.context_length):
+            kept_rows.append(row)
+        else:
+            filtered_rows += 1
+
+    output_path = Path(config.output_dir) / f"{source.source}.jsonl"
+    written_rows = _write_jsonl(output_path, kept_rows)
+    manifest = SourceManifest(
+        source=source.source,
+        dataset_id=source.dataset_id,
+        split=source.split,
+        seed=config.seed,
+        requested_rows=target_rows,
+        candidate_rows=len(sampled),
+        written_rows=written_rows,
+        filtered_rows=filtered_rows,
+        output_path=str(output_path),
+        sha256=_sha256_file(output_path),
+        dropped_rows=dropped_rows,
+    )
+    _update_manifest(config.output_dir, manifest)
+    return manifest
+
+
 def prepare_all(config: SFTDataConfig) -> dict[str, SourceManifest]:
     """Prepare the public SFT sources and the local tool source."""
-    manifests = [prepare_assistant(config), prepare_gsm8k(config), *prepare_tool(config).values()]
+    manifests = [
+        prepare_assistant(config),
+        prepare_gsm8k(config),
+        prepare_public_tool(config),
+        *prepare_tool(config).values(),
+    ]
     return {manifest.source: manifest for manifest in manifests}

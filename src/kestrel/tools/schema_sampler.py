@@ -692,3 +692,11 @@ UNSEEN_TOOL_FAMILIES: tuple[ToolFamilySpec, ...] = (
         ),
     ),
 )
+
+
+def m2_eval_tool_names() -> frozenset[str]:
+    """Return every local tool name used by the M2 seen and unseen eval sets."""
+    names: set[str] = set()
+    for family in (*TRAIN_TOOL_FAMILIES, *UNSEEN_TOOL_FAMILIES):
+        names.update(family.tool_names)
+    return frozenset(names)

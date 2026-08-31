@@ -5,6 +5,7 @@ Usage:
     uv run python scripts/run_prepare_sft.py --source assistant
     uv run python scripts/run_prepare_sft.py --source gsm8k
     uv run python scripts/run_prepare_sft.py --source tool
+    uv run python scripts/run_prepare_sft.py --source public_tool
 """
 
 from __future__ import annotations
@@ -22,6 +23,7 @@ from kestrel.data.sft_prepare import (  # noqa: E402
     prepare_all,
     prepare_assistant,
     prepare_gsm8k,
+    prepare_public_tool,
     prepare_tool,
 )
 
@@ -40,7 +42,7 @@ def main() -> None:
     parser.add_argument("--config", default=DEFAULT_CONFIG, help="SFT data config YAML")
     parser.add_argument(
         "--source",
-        choices=["assistant", "gsm8k", "tool", "all"],
+        choices=["assistant", "gsm8k", "tool", "public_tool", "all"],
         default="all",
         help="Which SFT source to prepare",
     )
@@ -53,6 +55,8 @@ def main() -> None:
         manifests = [prepare_gsm8k(config)]
     elif args.source == "tool":
         manifests = list(prepare_tool(config).values())
+    elif args.source == "public_tool":
+        manifests = [prepare_public_tool(config)]
     else:
         manifests = list(prepare_all(config).values())
 

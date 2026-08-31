@@ -30,3 +30,12 @@ tool:
     unseen: 500
     no_call: 250
     missing_info: 250
+public_tool:
+  dataset_id: argilla/apigen-function-calling
+  split: train
+  source: tool_public
+  target_rows: 5000
+  max_tools: 5
+  max_query_chars: 512
+  max_tool_chars: 2048
+  max_list_items: 10
