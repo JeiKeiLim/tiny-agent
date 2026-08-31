@@ -15,3 +15,18 @@ gsm8k:
   split: train
   source: gsm8k_math
   target_rows: 7500
+tool:
+  source: tool_local
+  min_tools: 3
+  max_tools: 5
+  train:
+    direct: 6000
+    no_tool: 1500
+    distractor_heavy: 1000
+    missing_info: 750
+    hard_variation: 750
+  eval:
+    seen: 500
+    unseen: 500
+    no_call: 250
+    missing_info: 250

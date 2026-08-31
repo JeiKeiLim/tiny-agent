@@ -17,6 +17,13 @@ from kestrel.data.sft_chat import render_sft
 from kestrel.data.sft_prepare_gsm8k import convert_gsm8k_row, load_gsm8k_rows
 from kestrel.data.sft_prepare_public import convert_smol_row, load_smol_rows
 from kestrel.data.sft_schema import SFTRow
+from kestrel.data.sft_tool_generator import (
+    ToolEvalBreakdown,
+    ToolGeneratorConfig,
+    ToolTrainBreakdown,
+    generate_tool_eval,
+    generate_tool_train,
+)
 
 
 class AssistantSourceConfig(BaseConfig):
@@ -38,6 +45,16 @@ class Gsm8kSourceConfig(BaseConfig):
     target_rows: int = Field(default=7_500, gt=0)
 
 
+class ToolSourceConfig(BaseConfig):
+    """Settings for the local rule-based tool SFT source."""
+
+    source: str = "tool_local"
+    min_tools: int = Field(default=3, ge=2, le=5)
+    max_tools: int = Field(default=5, ge=3, le=5)
+    train: ToolTrainBreakdown = Field(default_factory=ToolTrainBreakdown)
+    eval: ToolEvalBreakdown = Field(default_factory=ToolEvalBreakdown)
+
+
 class SFTDataConfig(BaseConfig):
     """Strict settings for M2 SFT data preparation."""
 
@@ -47,6 +64,7 @@ class SFTDataConfig(BaseConfig):
     seed: int = 42
     assistant: AssistantSourceConfig = Field(default_factory=AssistantSourceConfig)
     gsm8k: Gsm8kSourceConfig = Field(default_factory=Gsm8kSourceConfig)
+    tool: ToolSourceConfig = Field(default_factory=ToolSourceConfig)
 
 
 class SourceManifest(BaseConfig):
@@ -193,7 +211,83 @@ def prepare_gsm8k(config: SFTDataConfig) -> SourceManifest:
     )
 
 
+def _write_tool_split(
+    *,
+    output_dir: str,
+    source: str,
+    split: str,
+    seed: int,
+    rows: list[SFTRow],
+    tokenizer: Tokenizer,
+    context_length: int,
+) -> SourceManifest:
+    kept_rows: list[SFTRow] = []
+    filtered_rows = 0
+    for row in rows:
+        if _passes_context_filter(row, tokenizer, context_length):
+            kept_rows.append(row)
+        else:
+            filtered_rows += 1
+
+    output_path = Path(output_dir) / f"{source}.jsonl"
+    written_rows = _write_jsonl(output_path, kept_rows)
+    manifest = SourceManifest(
+        source=source,
+        dataset_id="local-rule-based-tool-generator",
+        split=split,
+        seed=seed,
+        requested_rows=len(rows),
+        candidate_rows=len(rows),
+        written_rows=written_rows,
+        filtered_rows=filtered_rows,
+        output_path=str(output_path),
+        sha256=_sha256_file(output_path),
+    )
+    _update_manifest(output_dir, manifest)
+    return manifest
+
+
+def prepare_tool(config: SFTDataConfig) -> dict[str, SourceManifest]:
+    """Generate and write the local rule-based tool train and eval splits."""
+    generator_config = ToolGeneratorConfig(
+        seed=config.seed,
+        min_tools=config.tool.min_tools,
+        max_tools=config.tool.max_tools,
+        train=config.tool.train,
+        eval=config.tool.eval,
+    )
+    train_rows = generate_tool_train(generator_config).all_rows
+    random.Random(config.seed).shuffle(train_rows)
+    eval_rows = generate_tool_eval(generator_config)
+    tokenizer = Tokenizer.from_file(config.tokenizer_path)
+
+    splits = {
+        "train": (config.tool.source, "train", train_rows),
+        "eval_seen": ("tool_eval_seen", "eval_seen", list(eval_rows.seen)),
+        "eval_unseen": ("tool_eval_unseen", "eval_unseen", list(eval_rows.unseen)),
+        "eval_no_call": ("tool_eval_no_call", "eval_no_call", list(eval_rows.no_call)),
+        "eval_missing_info": (
+            "tool_eval_missing_info",
+            "eval_missing_info",
+            list(eval_rows.missing_info),
+        ),
+    }
+    manifests = [
+        _write_tool_split(
+            output_dir=config.output_dir,
+            source=source,
+            split=split,
+            seed=config.seed,
+            rows=rows,
+            tokenizer=tokenizer,
+            context_length=config.context_length,
+        )
+        for split, (source, manifest_split, rows) in splits.items()
+    ]
+    return {manifest.source: manifest for manifest in manifests}
+
+
 def prepare_all(config: SFTDataConfig) -> dict[str, SourceManifest]:
-    """Prepare both public SFT sources."""
-    manifests = [prepare_assistant(config), prepare_gsm8k(config)]
+    """Prepare the public SFT sources and the local tool source."""
+    manifests = [prepare_assistant(config), prepare_gsm8k(config), *prepare_tool(config).values()]
     return {manifest.source: manifest for manifest in manifests}

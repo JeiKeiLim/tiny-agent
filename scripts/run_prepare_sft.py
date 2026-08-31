@@ -1,9 +1,10 @@
-"""Prepare M2 SFT source datasets from public Hugging Face data.
+"""Prepare M2 SFT source datasets.
 
 Usage:
     uv run python scripts/run_prepare_sft.py --source all
     uv run python scripts/run_prepare_sft.py --source assistant
     uv run python scripts/run_prepare_sft.py --source gsm8k
+    uv run python scripts/run_prepare_sft.py --source tool
 """
 
 from __future__ import annotations
@@ -21,6 +22,7 @@ from kestrel.data.sft_prepare import (  # noqa: E402
     prepare_all,
     prepare_assistant,
     prepare_gsm8k,
+    prepare_tool,
 )
 
 DEFAULT_CONFIG = "configs/kestrel/sft_data.yaml"
@@ -38,7 +40,7 @@ def main() -> None:
     parser.add_argument("--config", default=DEFAULT_CONFIG, help="SFT data config YAML")
     parser.add_argument(
         "--source",
-        choices=["assistant", "gsm8k", "all"],
+        choices=["assistant", "gsm8k", "tool", "all"],
         default="all",
         help="Which SFT source to prepare",
     )
@@ -49,6 +51,8 @@ def main() -> None:
         manifests = [prepare_assistant(config)]
     elif args.source == "gsm8k":
         manifests = [prepare_gsm8k(config)]
+    elif args.source == "tool":
+        manifests = list(prepare_tool(config).values())
     else:
         manifests = list(prepare_all(config).values())
 
