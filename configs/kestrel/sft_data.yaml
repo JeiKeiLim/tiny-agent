@@ -39,3 +39,17 @@ public_tool:
   max_query_chars: 512
   max_tool_chars: 2048
   max_list_items: 10
+internal_llm:
+  enabled: false
+  api_base_env: KESTREL_LLM_API_BASE
+  api_key_env: KESTREL_LLM_API_KEY
+  model_env: KESTREL_LLM_MODEL
+  source: internal_llm
+  prompt_version: v1
+  assistant_rows: 2000
+  math_rows: 2000
+  tool_rows: 1000
+  max_workers: 8
+  progress_every: 10
+  debug_drops: false
+  debug_drop_limit: 20

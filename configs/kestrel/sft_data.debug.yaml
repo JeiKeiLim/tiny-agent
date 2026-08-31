@@ -1,0 +1,20 @@
+# Local debugging config for internal LLM math generation.
+# This writes to data/sft/raw-debug, not the canonical data/sft/raw mixture.
+output_dir: data/sft/raw-debug
+tokenizer_path: checkpoints/tokenizer/tokenizer.json
+context_length: 1024
+seed: 42
+internal_llm:
+  enabled: true
+  api_base_env: KESTREL_LLM_API_BASE
+  api_key_env: KESTREL_LLM_API_KEY
+  model_env: KESTREL_LLM_MODEL
+  source: internal_llm
+  prompt_version: v1
+  assistant_rows: 0
+  math_rows: 20
+  tool_rows: 0
+  max_workers: 8
+  progress_every: 1
+  debug_drops: true
+  debug_drop_limit: 50

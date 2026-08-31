@@ -6,6 +6,7 @@ Usage:
     uv run python scripts/run_prepare_sft.py --source gsm8k
     uv run python scripts/run_prepare_sft.py --source tool
     uv run python scripts/run_prepare_sft.py --source public_tool
+    uv run python scripts/run_prepare_sft.py --source internal_llm
 """
 
 from __future__ import annotations
@@ -23,6 +24,7 @@ from kestrel.data.sft_prepare import (  # noqa: E402
     prepare_all,
     prepare_assistant,
     prepare_gsm8k,
+    prepare_internal_llm,
     prepare_public_tool,
     prepare_tool,
 )
@@ -42,7 +44,7 @@ def main() -> None:
     parser.add_argument("--config", default=DEFAULT_CONFIG, help="SFT data config YAML")
     parser.add_argument(
         "--source",
-        choices=["assistant", "gsm8k", "tool", "public_tool", "all"],
+        choices=["assistant", "gsm8k", "tool", "public_tool", "internal_llm", "all"],
         default="all",
         help="Which SFT source to prepare",
     )
@@ -57,6 +59,12 @@ def main() -> None:
         manifests = list(prepare_tool(config).values())
     elif args.source == "public_tool":
         manifests = [prepare_public_tool(config)]
+    elif args.source == "internal_llm":
+        manifest = prepare_internal_llm(config)
+        if manifest is None:
+            msg = "internal_llm source is disabled in the config"
+            raise SystemExit(msg)
+        manifests = [manifest]
     else:
         manifests = list(prepare_all(config).values())
 

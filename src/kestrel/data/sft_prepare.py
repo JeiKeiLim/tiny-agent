@@ -5,6 +5,7 @@ from __future__ import annotations
 import hashlib
 import json
 import random
+import sys
 from collections.abc import Callable, Iterator
 from pathlib import Path
 from typing import Any
@@ -14,6 +15,11 @@ from tokenizers import Tokenizer
 
 from kestrel.common.config import BaseConfig
 from kestrel.data.sft_chat import render_sft
+from kestrel.data.sft_internal_llm import (
+    InternalLLMConfig,
+    create_llm_client,
+    generate_internal_llm_rows,
+)
 from kestrel.data.sft_prepare_gsm8k import convert_gsm8k_row, load_gsm8k_rows
 from kestrel.data.sft_prepare_public import convert_smol_row, load_smol_rows
 from kestrel.data.sft_public_tool import PublicToolNormalizer, load_public_tool_rows
@@ -81,6 +87,7 @@ class SFTDataConfig(BaseConfig):
     gsm8k: Gsm8kSourceConfig = Field(default_factory=Gsm8kSourceConfig)
     tool: ToolSourceConfig = Field(default_factory=ToolSourceConfig)
     public_tool: PublicToolSourceConfig = Field(default_factory=PublicToolSourceConfig)
+    internal_llm: InternalLLMConfig = Field(default_factory=InternalLLMConfig)
 
 
 class SourceManifest(BaseConfig):
@@ -98,6 +105,9 @@ class SourceManifest(BaseConfig):
     sha256: str
     dataset_config: str | None = None
     dropped_rows: int = 0
+    model_env: str | None = None
+    prompt_version: str | None = None
+    generated_counts: dict[str, int] | None = None
 
 
 def reservoir_sample(rows: Iterator[dict[str, Any]], k: int, seed: int) -> list[dict[str, Any]]:
@@ -381,12 +391,79 @@ def prepare_public_tool(config: SFTDataConfig) -> SourceManifest:
     return manifest
 
 
+def prepare_internal_llm(config: SFTDataConfig) -> SourceManifest | None:
+    """Prepare the optional internal LLM source, or return None when disabled."""
+    source = config.internal_llm
+    if not source.enabled:
+        return None
+
+    client = create_llm_client(source)
+
+    def _report_progress(state: dict[str, int]) -> None:
+        print(
+            "internal_llm: "
+            f"assistant {state['assistant']}/{source.assistant_rows}, "
+            f"math {state['math']}/{source.math_rows}, "
+            f"tool {state['tool']}/{source.tool_rows}",
+            file=sys.stderr,
+        )
+
+    debug_callback: Callable[[str, str, str], None] | None = None
+    if source.debug_drops:
+
+        def _report_drop(category: str, reason: str, detail: str) -> None:
+            message = f"internal_llm debug: {category} dropped reason={reason}"
+            if detail:
+                message += f" detail={detail!r}"
+            print(message, file=sys.stderr)
+
+        debug_callback = _report_drop
+
+    rows, generated_counts = generate_internal_llm_rows(
+        source, client, config.seed, _report_progress, debug_callback
+    )
+    tokenizer = Tokenizer.from_file(config.tokenizer_path)
+
+    kept_rows: list[SFTRow] = []
+    filtered_rows = 0
+    for row in rows:
+        if _passes_context_filter(row, tokenizer, config.context_length):
+            kept_rows.append(row)
+        else:
+            filtered_rows += 1
+
+    requested_rows = source.assistant_rows + source.math_rows + source.tool_rows
+    output_path = Path(config.output_dir) / f"{source.source}.jsonl"
+    written_rows = _write_jsonl(output_path, kept_rows)
+    manifest = SourceManifest(
+        source=source.source,
+        dataset_id=f"internal-llm:{source.model_env}",
+        split="generated",
+        seed=config.seed,
+        requested_rows=requested_rows,
+        candidate_rows=len(rows),
+        written_rows=written_rows,
+        filtered_rows=filtered_rows,
+        output_path=str(output_path),
+        sha256=_sha256_file(output_path),
+        dropped_rows=max(0, requested_rows - len(rows)),
+        model_env=source.model_env,
+        prompt_version=source.prompt_version,
+        generated_counts=generated_counts,
+    )
+    _update_manifest(config.output_dir, manifest)
+    return manifest
+
+
 def prepare_all(config: SFTDataConfig) -> dict[str, SourceManifest]:
-    """Prepare the public SFT sources and the local tool source."""
+    """Prepare the public SFT sources, local tool source, and optional internal LLM."""
     manifests = [
         prepare_assistant(config),
         prepare_gsm8k(config),
         prepare_public_tool(config),
         *prepare_tool(config).values(),
     ]
+    internal_manifest = prepare_internal_llm(config)
+    if internal_manifest is not None:
+        manifests.append(internal_manifest)
     return {manifest.source: manifest for manifest in manifests}

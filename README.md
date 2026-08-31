@@ -40,7 +40,9 @@ Kestrel trains a **pair of small decoder-only models (50M and 150M)** from scrat
 - **Pretrain entry point** — `scripts/run_pretrain.py` with `configs/kestrel/50m/pretrain.yaml` and `configs/kestrel/150m/pretrain.yaml`, plus `generate()` (`model/generate.py`) for autoregressive sampling.
 - **Pretrain evaluation** — read-only `scripts/eval_pretrain.py` reports token-weighted held-out loss, perplexity, bits/token, and per-domain loss for saved checkpoints.
 
-**Planned, not yet built:** the later Track A stages (long-context, SFT, RL, serve + agent, eval) and Track B (PEFT/LoRA).
+**Milestone M2 (SFT validation) is partially implemented:** the SFT chat renderer, masked SFT dataset, SFT trainer, and data prep for public assistant, GSM8K, local tool, public tool, and optional internal LLM sources. The internal LLM source is disabled by default and reads endpoint, API key, and model name only from environment variables named in `configs/kestrel/sft_data.yaml`; `.env.example` lists the required variable names, and `.env` is gitignored.
+
+**Planned, not yet built:** long-context, the full SFT mixture/eval scorecard, RL, serve + agent, and Track B (PEFT/LoRA).
 
 ## Repo layout
 
