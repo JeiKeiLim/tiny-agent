@@ -7,6 +7,7 @@ Usage:
     uv run python scripts/run_prepare_sft.py --source tool
     uv run python scripts/run_prepare_sft.py --source public_tool
     uv run python scripts/run_prepare_sft.py --source internal_llm
+    uv run python scripts/run_prepare_sft.py --source eval
 """
 
 from __future__ import annotations
@@ -28,6 +29,7 @@ from kestrel.data.sft_prepare import (  # noqa: E402
     prepare_public_tool,
     prepare_tool,
 )
+from kestrel.data.sft_prepare_eval import prepare_eval  # noqa: E402
 
 DEFAULT_CONFIG = "configs/kestrel/sft_data.yaml"
 
@@ -44,7 +46,15 @@ def main() -> None:
     parser.add_argument("--config", default=DEFAULT_CONFIG, help="SFT data config YAML")
     parser.add_argument(
         "--source",
-        choices=["assistant", "gsm8k", "tool", "public_tool", "internal_llm", "all"],
+        choices=[
+            "assistant",
+            "gsm8k",
+            "tool",
+            "public_tool",
+            "internal_llm",
+            "eval",
+            "all",
+        ],
         default="all",
         help="Which SFT source to prepare",
     )
@@ -65,6 +75,8 @@ def main() -> None:
             msg = "internal_llm source is disabled in the config"
             raise SystemExit(msg)
         manifests = [manifest]
+    elif args.source == "eval":
+        manifests = list(prepare_eval(config).values())
     else:
         manifests = list(prepare_all(config).values())
 

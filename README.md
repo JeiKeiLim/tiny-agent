@@ -40,7 +40,7 @@ Kestrel trains a **pair of small decoder-only models (50M and 150M)** from scrat
 - **Pretrain entry point** — `scripts/run_pretrain.py` with `configs/kestrel/50m/pretrain.yaml` and `configs/kestrel/150m/pretrain.yaml`, plus `generate()` (`model/generate.py`) for autoregressive sampling.
 - **Pretrain evaluation** — read-only `scripts/eval_pretrain.py` reports token-weighted held-out loss, perplexity, bits/token, and per-domain loss for saved checkpoints.
 
-**Milestone M2 (SFT validation) is partially implemented:** the SFT chat renderer, masked SFT dataset, SFT trainer, raw SFT source prep (`scripts/run_prepare_sft.py`), SFT mixture builder (`scripts/run_build_sft_mixture.py`), SFT training entry point (`scripts/run_sft.py`), and interactive SFT chat (`scripts/chat_sft.py`). Data prep supports public assistant, GSM8K, local rule-based tool, public tool, and an optional internal LLM source. The internal LLM source is disabled by default and reads endpoint, API key, and model name only from environment variables named in `configs/kestrel/sft_data.yaml`; `.env.example` lists the required variable names, and `.env` is gitignored.
+**Milestone M2 (SFT validation) is partially implemented:** the SFT chat renderer, masked SFT dataset, SFT trainer, raw SFT source prep (`scripts/run_prepare_sft.py`), held-out SFT eval bundle prep (`scripts/run_prepare_sft.py --source eval`), SFT mixture builder (`scripts/run_build_sft_mixture.py`), SFT training entry point (`scripts/run_sft.py`), and interactive SFT chat (`scripts/chat_sft.py`). Data prep supports public assistant, GSM8K, local rule-based tool, public tool, and an optional internal LLM source. The internal LLM source is disabled by default and reads endpoint, API key, and model name only from environment variables named in `configs/kestrel/sft_data.yaml`; `.env.example` lists the required variable names, and `.env` is gitignored.
 
 **Planned, not yet built:** long-context, the broader SFT eval scorecard, RL, serve + agent, and Track B (PEFT/LoRA).
 
@@ -52,7 +52,7 @@ tiny-agent/
     tokenizer/        # train.yaml, train_data.yaml
     kestrel/          # from-scratch (Track A) — family of 2 sizes
       corpus.yaml     # pretrain corpus (output: data/corpus-12g)
-      sft_data.yaml   # SFT raw-source data prep and mixture recipe
+      sft_data.yaml   # SFT raw-source data prep, held-out eval bundle, and mixture recipe
       50m/            # model.yaml, pretrain.yaml, sft.yaml
       150m/           # model.yaml, pretrain.yaml, sft.yaml
   src/kestrel/
@@ -178,9 +178,12 @@ uv run python scripts/run_prepare_sft.py --source gsm8k
 uv run python scripts/run_prepare_sft.py --source tool
 uv run python scripts/run_prepare_sft.py --source public_tool
 uv run python scripts/run_prepare_sft.py --source internal_llm
+uv run python scripts/run_prepare_sft.py --source eval
 ```
 
 Sources, row targets, and output paths are set in `configs/kestrel/sft_data.yaml`. `target_rows` is the number of valid rows to write after conversion and context filtering; assistant prep uses `assistant.max_candidate_rows` as a safety cap on raw rows inspected. The internal LLM source is disabled by default; enable it in a local config copy and export the environment variables named in `.env.example` before running it. Progress and drop-debugging behavior are controlled by `internal_llm.progress_every`, `internal_llm.debug_drops`, and `internal_llm.debug_drop_limit`.
+
+`--source eval` writes the held-out scorecard eval bundle to `data/sft/eval/`: assistant rows from Smol-SmolTalk `test`, GSM8K rows from `test/main`, and the local tool seen/unseen/no-call/missing-info eval sets. The eval bundle is separate from the training mixture and is controlled by the `eval` section of `configs/kestrel/sft_data.yaml`.
 
 ### SFT mixture builder
 

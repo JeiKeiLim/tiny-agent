@@ -4,6 +4,7 @@ title: Add SFT eval harness and baseline scorecard
 status: To Do
 assignee: []
 created_date: '2026-08-31 01:21'
+updated_date: '2026-08-31 23:44'
 labels:
   - sft
   - eval
@@ -12,6 +13,7 @@ milestone: m-2
 dependencies:
   - TASK-007.03.04
   - TASK-007.03.08
+  - TASK-007.03.13
 parent_task_id: TASK-007.03
 priority: high
 ordinal: 49000
@@ -75,3 +77,9 @@ Acceptance:
 - [ ] #4 Scorecard compares pretrain-only baseline against SFT checkpoints
 - [ ] #5 make check passes
 <!-- AC:END -->
+
+## Implementation Notes
+
+<!-- SECTION:NOTES:BEGIN -->
+SFT scorecard eval bundle is prepared by TASK-007.03.13 under data/sft/eval. The eval harness should consume that held-out bundle instead of the training mixture.
+<!-- SECTION:NOTES:END -->

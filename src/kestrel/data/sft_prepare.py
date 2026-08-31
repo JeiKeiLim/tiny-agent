@@ -78,6 +78,24 @@ class PublicToolSourceConfig(BaseConfig):
     max_list_items: int = Field(default=10, gt=0)
 
 
+class SFTDataEvalConfig(BaseConfig):
+    """Strict settings for the held-out SFT eval bundle."""
+
+    output_dir: str = "data/sft/eval"
+    seed: int = 42
+    assistant_dataset_id: str = "HuggingFaceTB/smol-smoltalk"
+    assistant_split: str = "test"
+    assistant_source: str = "assistant_eval"
+    assistant_target_rows: int = Field(default=200, gt=0)
+    assistant_max_candidate_rows: int | None = Field(default=10_000, gt=0)
+    gsm8k_dataset_id: str = "openai/gsm8k"
+    gsm8k_dataset_config: str = "main"
+    gsm8k_split: str = "test"
+    gsm8k_source: str = "gsm8k_eval"
+    gsm8k_target_rows: int = Field(default=500, gt=0)
+    tool_eval: bool = True
+
+
 class SFTDataConfig(BaseConfig):
     """Strict settings for M2 SFT data preparation."""
 
@@ -91,6 +109,7 @@ class SFTDataConfig(BaseConfig):
     public_tool: PublicToolSourceConfig = Field(default_factory=PublicToolSourceConfig)
     internal_llm: InternalLLMConfig = Field(default_factory=InternalLLMConfig)
     mixture: MixtureConfig | None = None
+    eval: SFTDataEvalConfig | None = None
 
 
 class SourceManifest(BaseConfig):
@@ -250,7 +269,7 @@ def prepare_gsm8k(config: SFTDataConfig) -> SourceManifest:
     )
 
 
-def _write_tool_split(
+def write_tool_split(
     *,
     output_dir: str,
     source: str,
@@ -312,7 +331,7 @@ def prepare_tool(config: SFTDataConfig) -> dict[str, SourceManifest]:
         ),
     }
     manifests = [
-        _write_tool_split(
+        write_tool_split(
             output_dir=config.output_dir,
             source=source,
             split=split,
