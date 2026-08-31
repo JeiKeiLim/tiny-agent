@@ -1,0 +1,32 @@
+# Kestrel-150M short-context SFT validation. Loaded into
+# kestrel.train.sft.SFTConfig.
+#
+# Config-supported for the 50M vs 150M comparison, but not the first M2
+# execution target. The dataset path is produced by the SFT mixture builder.
+model: configs/kestrel/150m/model.yaml
+checkpoint: checkpoints/pretrain/150m/final
+dataset:
+  input: data/sft/mixture/sft-50k.jsonl
+  tokenizer_path: checkpoints/tokenizer/tokenizer.json
+  context_length: 1024
+  batch_size: 4
+  seed: 0
+  max_examples: null
+  preserve_source_ratios: true
+  epochs: 1
+trainer:
+  lr: 0.00005
+  weight_decay: 0.1
+  batch_size: 4
+  seq_len: 1024
+  num_steps: 0
+  warmup_steps: 50
+  grad_clip: 1.0
+  save_every: 500
+  log_every: 50
+  eval_every: 250
+  eval_iters: 5
+  output_dir: checkpoints/sft/150m
+  keep_latest_checkpoints: 3
+  keep_best_checkpoint: true
+  use_loss_mask: true

@@ -285,7 +285,12 @@ def test_best_checkpoint_written_on_strict_improvement_only(
 ) -> None:
     val_values = iter([10.0, 11.0, 9.0])
 
-    def fake_val_loss(model: Kestrel, val: Iterable[tuple[mx.array, ...]], iters: int) -> float:
+    def fake_val_loss(
+        model: Kestrel,
+        val: Iterable[tuple[mx.array, ...]],
+        iters: int,
+        use_loss_mask: bool = False,
+    ) -> float:
         return next(val_values)
 
     best_writes: list[Path] = []
@@ -333,7 +338,12 @@ def test_best_checkpoint_written_on_strict_improvement_only(
 def test_best_checkpoint_disabled(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     val_values = iter([10.0, 9.0])
 
-    def fake_val_loss(model: Kestrel, val: Iterable[tuple[mx.array, ...]], iters: int) -> float:
+    def fake_val_loss(
+        model: Kestrel,
+        val: Iterable[tuple[mx.array, ...]],
+        iters: int,
+        use_loss_mask: bool = False,
+    ) -> float:
         return next(val_values)
 
     monkeypatch.setattr("kestrel.train.trainer.estimate_val_loss", fake_val_loss)
@@ -361,7 +371,12 @@ def test_best_checkpoint_disabled(tmp_path: Path, monkeypatch: pytest.MonkeyPatc
 def test_best_checkpoint_survives_pruning(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     val_values = iter([10.0, 9.0])
 
-    def fake_val_loss(model: Kestrel, val: Iterable[tuple[mx.array, ...]], iters: int) -> float:
+    def fake_val_loss(
+        model: Kestrel,
+        val: Iterable[tuple[mx.array, ...]],
+        iters: int,
+        use_loss_mask: bool = False,
+    ) -> float:
         return next(val_values)
 
     monkeypatch.setattr("kestrel.train.trainer.estimate_val_loss", fake_val_loss)

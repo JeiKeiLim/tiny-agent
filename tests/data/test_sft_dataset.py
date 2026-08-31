@@ -252,3 +252,48 @@ def test_invalid_schema_raises_with_line_number(tmp_path: Path, tiny_tokenizer: 
 
     with pytest.raises(ValueError, match="line 1"):
         SFTDataset(_config(data, tiny_tokenizer))
+
+
+def test_iterator_state_resumes_at_batch_boundary(tmp_path: Path, tiny_tokenizer: Path) -> None:
+    data = tmp_path / "sft.jsonl"
+    _write_jsonl(data, [_row("a", f"hello world {index}") for index in range(4)])
+    dataset = SFTDataset(_config(data, tiny_tokenizer))
+
+    iterator = dataset.iterator()
+    first_batch = next(iterator)
+    state = iterator.state_dict()
+
+    resumed = dataset.load_iterator(state)
+    remaining = list(resumed)
+
+    fresh = list(dataset.iterator())
+    assert len(remaining) == 1
+    assert _batch_key(remaining[0]) == _batch_key(fresh[1])
+    assert _batch_key((first_batch[0], first_batch[1], first_batch[2])) == _batch_key(fresh[0])
+
+
+def test_iterator_repeats_for_epochs(tmp_path: Path, tiny_tokenizer: Path) -> None:
+    data = tmp_path / "sft.jsonl"
+    _write_jsonl(data, [_row("a", f"hello world {index}") for index in range(4)])
+    dataset = SFTDataset(_config(data, tiny_tokenizer, epochs=2))
+
+    assert dataset.estimated_steps() == 4
+    batches = list(dataset)
+
+    assert len(batches) == 4
+    assert _batch_key(batches[0]) == _batch_key(batches[2])
+    assert _batch_key(batches[1]) == _batch_key(batches[3])
+
+
+def test_iterator_rejects_config_mismatch(tmp_path: Path, tiny_tokenizer: Path) -> None:
+    data = tmp_path / "sft.jsonl"
+    _write_jsonl(data, [_row("a", f"hello world {index}") for index in range(4)])
+    dataset = SFTDataset(_config(data, tiny_tokenizer))
+
+    iterator = dataset.iterator()
+    next(iterator)
+    state = iterator.state_dict()
+    state["config"]["batch_size"] = 4
+
+    with pytest.raises(ValueError, match="different SFTDatasetConfig"):
+        dataset.load_iterator(state)

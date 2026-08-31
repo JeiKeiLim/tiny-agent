@@ -10,6 +10,10 @@ of shape ``(batch_size, seq_len)`` (see ``data/pretrain_dataset.py``). The
 next-token loss is ``cross_entropy(logits[:, :-1], target[:, :-1])`` (matches
 ``scripts/check_model.py``).
 
+When ``TrainerConfig.use_loss_mask`` is true, the third batch element is an
+input-aligned loss mask instead of ``doc_ids``. The loss is a masked mean over
+``logits[:, :-1]``, ``target[:, :-1]``, and ``mask[:, 1:]``.
+
 The step is run eagerly (no ``@mx.compile``): MLX's compile cache keys on
 argument shapes and captures the parameter arrays at trace time, so the
 in-place ``optimizer.update`` changes are invisible to the cached graph (stale
@@ -56,6 +60,7 @@ class TrainerConfig(BaseConfig):
     output_dir: str = "checkpoints/train"
     keep_latest_checkpoints: int | None = Field(default=3, ge=1)
     keep_best_checkpoint: bool = True
+    use_loss_mask: bool = False
 
 
 class TrainResult(BaseConfig):
@@ -112,7 +117,11 @@ def _clip_grads(grad: Any, max_norm: float) -> Any:
 
 
 def _unpack_batch(batch: tuple[mx.array, ...]) -> tuple[mx.array, mx.array, mx.array | None]:
-    """Accept legacy ``(input, target)`` batches and document-aware 3-tuples."""
+    """Accept legacy ``(input, target)`` batches and 3-tuples.
+
+    The third element is either ``doc_ids`` (pretrain) or ``loss_mask`` (SFT),
+    depending on ``TrainerConfig.use_loss_mask``.
+    """
     if len(batch) == 2:
         return batch[0], batch[1], None
     if len(batch) == 3:
@@ -122,20 +131,38 @@ def _unpack_batch(batch: tuple[mx.array, ...]) -> tuple[mx.array, mx.array, mx.a
 
 
 def _batch_loss(
-    model: nn.Module, x: mx.array, target: mx.array, doc_ids: mx.array | None = None
+    model: nn.Module,
+    x: mx.array,
+    target: mx.array,
+    doc_ids: mx.array | None = None,
+    use_loss_mask: bool = False,
 ) -> mx.array:
-    """Next-token cross-entropy for one pretraining batch."""
+    """Next-token cross-entropy for one pretraining or SFT batch."""
+    if use_loss_mask:
+        if doc_ids is None:
+            msg = "use_loss_mask requires a third batch element (loss_mask)"
+            raise ValueError(msg)
+        logits = model(x)
+        per_token = cross_entropy(logits[:, :-1], target[:, :-1], reduction="none")
+        mask = doc_ids[:, 1:].astype(mx.float32)
+        return mx.sum(per_token * mask) / mx.maximum(mx.sum(mask), 1.0)
+
     logits = model(x, doc_ids)
     return cross_entropy(logits[:, :-1], target[:, :-1], reduction="mean")
 
 
-def estimate_val_loss(model: nn.Module, val: Iterable[tuple[mx.array, ...]], iters: int) -> float:
+def estimate_val_loss(
+    model: nn.Module,
+    val: Iterable[tuple[mx.array, ...]],
+    iters: int,
+    use_loss_mask: bool = False,
+) -> float:
     """Mean next-token loss over up to ``iters`` validation batches."""
     total = 0.0
     n = 0
     for batch in val:
         x, target, doc_ids = _unpack_batch(batch)
-        total += cast(float, _batch_loss(model, x, target, doc_ids).item())
+        total += cast(float, _batch_loss(model, x, target, doc_ids, use_loss_mask).item())
         n += 1
         if n >= iters:
             break
@@ -297,7 +324,7 @@ def train(
                 _t: mx.array = target,
                 _d: mx.array | None = doc_ids,
             ) -> mx.array:
-                return _batch_loss(m, _x, _t, _d)
+                return _batch_loss(m, _x, _t, _d, config.use_loss_mask)
 
             value, grad = mx.value_and_grad(loss_fn)(model)
             opt.update(model, _clip_grads(grad, config.grad_clip))
@@ -306,7 +333,9 @@ def train(
 
             val_loss: float | None = None
             if config.eval_every > 0 and (step + 1) % config.eval_every == 0:
-                val_loss = estimate_val_loss(model, val_dataset, config.eval_iters)
+                val_loss = estimate_val_loss(
+                    model, val_dataset, config.eval_iters, config.use_loss_mask
+                )
                 if math.isfinite(val_loss) and (best_val is None or val_loss < best_val):
                     best_val = val_loss
                     if config.keep_best_checkpoint:
