@@ -1,0 +1,17 @@
+# M2 SFT source data preparation. Loaded into kestrel.data.sft_prepare.SFTDataConfig.
+# This dataset is shared by the 50M and 150M SFT runs.
+output_dir: data/sft/raw
+tokenizer_path: checkpoints/tokenizer/tokenizer.json
+context_length: 1024
+seed: 42
+assistant:
+  dataset_id: HuggingFaceTB/smol-smoltalk
+  split: train
+  source: assistant_public
+  target_rows: 22500
+gsm8k:
+  dataset_id: openai/gsm8k
+  dataset_config: main
+  split: train
+  source: gsm8k_math
+  target_rows: 7500
