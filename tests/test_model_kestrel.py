@@ -137,3 +137,67 @@ def test_all_zero_doc_ids_match_causal_path() -> None:
 
     diff = mx.max(mx.abs(logits_plain - logits_zero)).item()
     assert diff < 1e-3, f"all-zero doc_ids changed logits: {diff}"
+
+
+def test_prefill_matches_forward_and_fills_caches() -> None:
+    mx.random.seed(5)
+    model = Kestrel(_tiny_doc_config())
+    x = mx.random.randint(0, 32, (1, 6))
+
+    logits, caches = model.prefill(x, reserve=4)
+
+    expected = model(x)
+    diff = mx.max(mx.abs(logits - expected)).item()
+    assert diff < 1e-5, f"prefill logits differ from forward: {diff}"
+    assert len(caches) == model.config.n_layers
+    assert all(cache.length == 6 for cache in caches)
+    assert all(cache.capacity >= 10 for cache in caches)
+
+
+def test_decode_matches_full_forward() -> None:
+    mx.random.seed(6)
+    model = Kestrel(_tiny_doc_config())
+    prefix = mx.random.randint(0, 32, (1, 5))
+    next_token = mx.random.randint(0, 32, (1, 1))
+
+    _, caches = model.prefill(prefix, reserve=1)
+    decode_logits, caches = model.decode(next_token, caches)
+    full_logits = model(mx.concatenate([prefix, next_token], axis=1))
+
+    diff = mx.max(mx.abs(decode_logits - full_logits[:, 5:6, :])).item()
+    assert diff < 1e-5, f"decode logits differ from full forward: {diff}"
+    assert all(cache.length == 6 for cache in caches)
+
+
+def test_decode_grows_cache_when_reserve_is_insufficient() -> None:
+    mx.random.seed(7)
+    model = Kestrel(_tiny_doc_config())
+    prefix = mx.random.randint(0, 32, (1, 4))
+    next_token = mx.random.randint(0, 32, (1, 1))
+
+    _, caches = model.prefill(prefix, reserve=0)
+    decode_logits, caches = model.decode(next_token, caches)
+
+    assert decode_logits.shape == (1, 1, 32)
+    assert all(cache.length == 5 for cache in caches)
+    assert all(cache.capacity >= 5 for cache in caches)
+
+
+def test_prefill_rejects_empty_prompt_or_negative_reserve() -> None:
+    model = Kestrel(_tiny_doc_config())
+    empty = mx.zeros((1, 0), dtype=mx.int32)
+    with pytest.raises(ValueError, match="non-empty prompt"):
+        model.prefill(empty)
+    with pytest.raises(ValueError, match="reserve"):
+        model.prefill(mx.zeros((1, 1), dtype=mx.int32), reserve=-1)
+
+
+def test_decode_rejects_wrong_token_shape_or_cache_count() -> None:
+    model = Kestrel(_tiny_doc_config())
+    x = mx.zeros((1, 1), dtype=mx.int32)
+    _, caches = model.prefill(x, reserve=1)
+
+    with pytest.raises(ValueError, match="shape \\(B, 1\\)"):
+        model.decode(mx.zeros((1, 2), dtype=mx.int32), caches)
+    with pytest.raises(ValueError, match="caches"):
+        model.decode(x, [])

@@ -16,7 +16,7 @@ from tokenizers.models import WordLevel
 from tokenizers.pre_tokenizers import Whitespace
 
 from kestrel.model.config import ModelConfig
-from kestrel.model.generate import generate
+from kestrel.model.generate import _generate_no_cache, generate
 from kestrel.model.kestrel import Kestrel
 
 VOCAB = {"[UNK]": 0, "a": 1, "b": 2, "c": 3, "im_end": 4}
@@ -229,3 +229,120 @@ def test_generate_negative_clear_cache_every_raises() -> None:
     model = _fixed_logits_model({1: 1.0})
     with pytest.raises(ValueError, match="clear_cache_every"):
         generate(model, tok, "a", max_tokens=1, temp=0.0, clear_cache_every=-1)
+
+
+def test_generate_kestrel_matches_no_cache_fallback() -> None:
+    mx.random.seed(0)
+    model = _tiny_model()
+    tok = _tiny_tokenizer()
+
+    cached = generate(model, tok, "a b", max_tokens=8, temp=0.0)
+    no_cache = _generate_no_cache(
+        model,
+        tok,
+        "a b",
+        8,
+        0.0,
+        tok.token_to_id("im_end"),
+        1.0,
+        0,
+    )
+
+    assert cached == no_cache
+
+
+class _ScriptedCachedModel:
+    """Minimal prefill/decode model for exercising the cached generate path."""
+
+    def __init__(self, script: list[int]) -> None:
+        self.script = script
+        self.prefill_calls = 0
+        self.decode_calls = 0
+        self._decode_index = 0
+
+    def _logits(self) -> mx.array:
+        logits = mx.zeros((1, 1, V))
+        if self._decode_index < len(self.script):
+            logits[0, 0, self.script[self._decode_index]] = 10.0
+        return logits
+
+    def prefill(self, x: mx.array, reserve: int = 0) -> tuple[mx.array, list[object]]:
+        self.prefill_calls += 1
+        return self._logits(), []
+
+    def decode(self, x: mx.array, caches: list[object]) -> tuple[mx.array, list[object]]:
+        self.decode_calls += 1
+        self._decode_index += 1
+        return self._logits(), caches
+
+
+def test_generate_cached_path_produces_max_tokens() -> None:
+    tok = _tiny_tokenizer()
+    model = _ScriptedCachedModel([1] * 5)
+
+    out = generate(model, tok, "a", max_tokens=5, temp=0.0)
+
+    assert out == "a a a a a"
+    assert model.prefill_calls == 1
+    assert model.decode_calls == 5
+
+
+def test_generate_cached_path_stops_on_eos() -> None:
+    tok = _tiny_tokenizer()
+    model = _ScriptedCachedModel([1, 2, 4])
+
+    out = generate(model, tok, "a", max_tokens=10, temp=0.0)
+
+    assert out == "a b"
+    assert model.prefill_calls == 1
+    assert model.decode_calls == 2
+
+
+def test_generate_cached_path_applies_repetition_penalty() -> None:
+    tok = _tiny_tokenizer()
+
+    class FixedCachedModel:
+        def prefill(self, x: mx.array, reserve: int = 0) -> tuple[mx.array, list[object]]:
+            logits = mx.zeros((1, 1, V))
+            logits[0, 0, 1] = 10.0
+            logits[0, 0, 2] = 9.0
+            return logits, []
+
+        def decode(self, x: mx.array, caches: list[object]) -> tuple[mx.array, list[object]]:
+            logits = mx.zeros((1, 1, V))
+            logits[0, 0, 1] = 10.0
+            logits[0, 0, 2] = 9.0
+            return logits, caches
+
+    out = generate(FixedCachedModel(), tok, "a", max_tokens=2, temp=0.0, repetition_penalty=2.0)
+
+    assert out == "a b"
+
+
+def test_generate_cached_path_clears_cache_on_cadence(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    tok = _tiny_tokenizer()
+    model = _ScriptedCachedModel([1] * 4)
+    clear_calls: list[int] = []
+
+    def fake_clear_cache() -> None:
+        clear_calls.append(model.decode_calls)
+
+    monkeypatch.setattr(mx, "clear_cache", fake_clear_cache)
+
+    out = generate(model, tok, "a", max_tokens=4, temp=0.0, clear_cache_every=2)
+
+    assert out == "a a a a"
+    assert clear_calls == [2, 4]
+
+
+def test_generate_zero_max_tokens_returns_empty_without_model_call() -> None:
+    tok = _tiny_tokenizer()
+    model = _ScriptedCachedModel([1])
+
+    out = generate(model, tok, "a", max_tokens=0, temp=0.0)
+
+    assert out == ""
+    assert model.prefill_calls == 0
+    assert model.decode_calls == 0

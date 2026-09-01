@@ -10,6 +10,10 @@ When ``doc_ids`` of shape ``(B, T)`` is provided, attention is restricted to
 tokens with the same document id, and RoPE positions reset to 0 at every
 document boundary. Without ``doc_ids``, the model uses ordinary causal
 attention.
+
+``Kestrel.prefill`` and ``Kestrel.decode`` provide an inference-only KV-cache
+path. The training ``__call__`` path, checkpoint format, and document-aware
+forward path remain unchanged.
 """
 
 from __future__ import annotations
@@ -18,6 +22,7 @@ import mlx.core as mx
 import mlx.nn as nn
 from mlx.utils import tree_flatten
 
+from kestrel.model.cache import KVCache
 from kestrel.model.config import ModelConfig
 
 
@@ -150,7 +155,12 @@ class Attention(nn.Module):  # type: ignore[misc]
         self.o_proj = nn.Linear(self.n_heads * self.head_dim, h, bias=False)
 
     def __call__(
-        self, x: mx.array, cos: mx.array, sin: mx.array, doc_ids: mx.array | None = None
+        self,
+        x: mx.array,
+        cos: mx.array,
+        sin: mx.array,
+        doc_ids: mx.array | None = None,
+        cache: KVCache | None = None,
     ) -> mx.array:
         B, T = x.shape[0], x.shape[1]
         q = self.q_proj(x).reshape(B, T, self.n_heads, self.head_dim).transpose(0, 2, 1, 3)
@@ -158,7 +168,28 @@ class Attention(nn.Module):  # type: ignore[misc]
         v = self.v_proj(x).reshape(B, T, self.n_kv_heads, self.head_dim).transpose(0, 2, 1, 3)
         q, k = apply_rotary_emb(q, k, cos, sin)
         scale = 1.0 / (self.head_dim**0.5)
-        out = causal_sdpa(q, k, v, scale=scale, doc_ids=doc_ids)
+        if cache is None:
+            out = causal_sdpa(q, k, v, scale=scale, doc_ids=doc_ids)
+        else:
+            if doc_ids is not None:
+                msg = "KV-cache generation does not support doc_ids"
+                raise ValueError(msg)
+            prefix = cache.length
+            cache.write(k, v)
+            keys = cache.keys()
+            values = cache.values()
+            if prefix == 0:
+                out = mx.fast.scaled_dot_product_attention(
+                    q, keys, values, scale=scale, mask="causal" if T > 1 else None
+                )
+            elif T == 1:
+                out = mx.fast.scaled_dot_product_attention(q, keys, values, scale=scale)
+            else:
+                key_len = cache.length
+                query_pos = mx.arange(prefix, key_len)[:, None]
+                key_pos = mx.arange(key_len)[None, :]
+                mask = (key_pos <= query_pos)[None, None, :, :]
+                out = mx.fast.scaled_dot_product_attention(q, keys, values, scale=scale, mask=mask)
         out = out.transpose(0, 2, 1, 3).reshape(B, T, self.n_heads * self.head_dim)
         return self.o_proj(out)  # type: ignore[no-any-return]
 
@@ -189,9 +220,14 @@ class TransformerBlock(nn.Module):  # type: ignore[misc]
         self.ffn = FeedForward(config)
 
     def __call__(
-        self, x: mx.array, cos: mx.array, sin: mx.array, doc_ids: mx.array | None = None
+        self,
+        x: mx.array,
+        cos: mx.array,
+        sin: mx.array,
+        doc_ids: mx.array | None = None,
+        cache: KVCache | None = None,
     ) -> mx.array:
-        x = x + self.attn(self.attn_norm(x), cos, sin, doc_ids)
+        x = x + self.attn(self.attn_norm(x), cos, sin, doc_ids, cache)
         return x + self.ffn(self.ffn_norm(x))
 
 
@@ -207,14 +243,62 @@ class Kestrel(nn.Module):  # type: ignore[misc]
         self.final_norm = RMSNorm(config.hidden_size)
 
     def __call__(self, x: mx.array, doc_ids: mx.array | None = None) -> mx.array:
-        h = self.embed(x)
         if doc_ids is None:
             cos, sin = precompute_freqs_cis(self.head_dim, x.shape[1], self.config.rope_theta)
         else:
             positions = document_positions(doc_ids)
             cos, sin = _freqs_cis_at(self.head_dim, positions, self.config.rope_theta)
-        for layer in self.layers:
-            h = layer(h, cos, sin, doc_ids)
+        return self._forward(x, cos, sin, doc_ids, None)
+
+    def prefill(self, x: mx.array, reserve: int = 0) -> tuple[mx.array, list[KVCache]]:
+        """Run a full prompt forward pass and return logits plus fresh KV caches."""
+        if x.ndim != 2:
+            msg = f"x must have shape (B, T), got {x.shape}"
+            raise ValueError(msg)
+        if x.shape[1] == 0:
+            msg = "prefill requires a non-empty prompt"
+            raise ValueError(msg)
+        if reserve < 0:
+            msg = f"reserve must be >= 0, got {reserve}"
+            raise ValueError(msg)
+        caches = [
+            KVCache(
+                x.shape[0],
+                self.config.n_kv_heads,
+                self.head_dim,
+                x.shape[1] + reserve,
+                dtype=self.embed.weight.dtype,
+            )
+            for _ in self.layers
+        ]
+        cos, sin = precompute_freqs_cis(self.head_dim, x.shape[1], self.config.rope_theta)
+        logits = self._forward(x, cos, sin, None, caches)
+        return logits, caches
+
+    def decode(self, x: mx.array, caches: list[KVCache]) -> tuple[mx.array, list[KVCache]]:
+        """Run a single-token decode step against existing KV caches."""
+        if x.ndim != 2 or x.shape[1] != 1:
+            msg = f"decode requires x with shape (B, 1), got {x.shape}"
+            raise ValueError(msg)
+        if not caches or len(caches) != len(self.layers):
+            msg = f"decode requires {len(self.layers)} caches, got {len(caches)}"
+            raise ValueError(msg)
+        position = caches[0].length
+        cos, sin = _freqs_cis_at(self.head_dim, mx.array([position]), self.config.rope_theta)
+        logits = self._forward(x, cos, sin, None, caches)
+        return logits, caches
+
+    def _forward(
+        self,
+        x: mx.array,
+        cos: mx.array,
+        sin: mx.array,
+        doc_ids: mx.array | None,
+        caches: list[KVCache] | None,
+    ) -> mx.array:
+        h = self.embed(x)
+        for i, layer in enumerate(self.layers):
+            h = layer(h, cos, sin, doc_ids, caches[i] if caches is not None else None)
         h = self.final_norm(h)
         return mx.matmul(h, self.embed.weight.T)
 

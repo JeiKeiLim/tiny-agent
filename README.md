@@ -136,7 +136,7 @@ A standalone smoke-test CLI loads a model (random-init or from a checkpoint), ru
 uv run python scripts/check_model.py --config configs/kestrel/50m/model.yaml
 ```
 
-Add `--checkpoint <path>` to load a trained checkpoint instead of random init, and `--generate` to sample text after the report. The current no-KV-cache generation path releases unused MLX allocator cache every `--clear-cache-every N` generated tokens (default `64`, `0` disables) to bound retained cache memory during long generations. On an untrained model the loss is ~ln(vocab) (~9.7 for 16k) and the top tokens are gibberish — expected, not a bug.
+Add `--checkpoint <path>` to load a trained checkpoint instead of random init, and `--generate` to sample text after the report. Kestrel models use a KV-cache `prefill` + single-token `decode` generation path; plain callable models fall back to the no-cache path. `--clear-cache-every N` releases unused temporary MLX allocator cache every N generated tokens (default `64`, `0` disables). On an untrained model the loss is ~ln(vocab) (~9.7 for 16k) and the top tokens are gibberish — expected, not a bug.
 
 ### Pretrain
 
@@ -214,7 +214,7 @@ The SFT scorecard evaluates checkpoints inference-only on the held-out bundle fr
 uv run python scripts/run_eval_sft.py --config configs/kestrel/50m/eval_sft.yaml
 ```
 
-It reports assistant sanity checks, GSM8K final-answer accuracy, local tool seen/unseen/no-call/missing-info metrics, and optional held-out pretrain perplexity. The committed 50M config scores the pretrain checkpoint plus the expected `5k`, `20k`, and `50k` SFT checkpoints; missing checkpoints are skipped by default so the pretrain baseline can be scored before SFT training completes. `--max-rows N` limits each eval set for smoke runs, `--output PATH` overrides the scorecard path, and `--skip-perplexity` skips the corpus perplexity measurement. The `generation.clear_cache_every` config field controls MLX allocator-cache release cadence during generation (default `64`, `0` disables).
+It reports assistant sanity checks, GSM8K final-answer accuracy, local tool seen/unseen/no-call/missing-info metrics, and optional held-out pretrain perplexity. The committed 50M config scores the pretrain checkpoint plus the expected `5k`, `20k`, and `50k` SFT checkpoints; missing checkpoints are skipped by default so the pretrain baseline can be scored before SFT training completes. `--max-rows N` limits each eval set for smoke runs, `--output PATH` overrides the scorecard path, and `--skip-perplexity` skips the corpus perplexity measurement. Generation uses the Kestrel KV-cache path when available. The `generation.clear_cache_every` config field controls temporary MLX allocator-cache release cadence during generation (default `64`, `0` disables).
 
 ### SFT chat
 
