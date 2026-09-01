@@ -21,6 +21,7 @@ htmlcov/
 /data/
 /checkpoints/
 /outputs/
+/logs/
 *.mlx
 *.safetensors
 

@@ -1,0 +1,33 @@
+# Kestrel-50M pretrain on the full 12GiB corpus (~3.27B train tokens).
+# Loaded into kestrel.train.pretrain.PretrainConfig.
+#
+# Full-corpus retrain from random init (doc-005 "full 3B" option):
+# total_tokens is null, so the run trains until the 12GiB train split is
+# exhausted (single pass, no multi-epoch). This matches the 150M data budget
+# (configs/kestrel/150m/pretrain.yaml), keeping the 50M vs 150M scaling
+# comparison at a matched token budget.
+#
+# All trainer hyperparameters are identical to the 1B run
+# (configs/kestrel/50m/pretrain.yaml) so the data budget is the only variable.
+# The LR horizon auto-derives from the corpus estimated step count.
+#
+# betas is intentionally unset: TrainerConfig defaults to (0.9, 0.95).
+model: configs/kestrel/50m/model.yaml
+tokenizer: checkpoints/tokenizer/tokenizer.json
+corpus: configs/kestrel/corpus.yaml
+total_tokens: null
+trainer:
+  lr: 0.0003
+  weight_decay: 0.1
+  batch_size: 8
+  seq_len: 1024
+  num_steps: 0
+  warmup_steps: 500
+  grad_clip: 1.0
+  save_every: 2000
+  log_every: 100
+  eval_every: 1000
+  eval_iters: 10
+  output_dir: checkpoints/pretrain/50m-3b
+  keep_latest_checkpoints: 5
+  keep_best_checkpoint: true
