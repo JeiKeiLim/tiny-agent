@@ -1,0 +1,34 @@
+# Kestrel-50M SFT eval scorecard. Loaded into kestrel.eval.sft.SFTEvalConfig.
+#
+# The eval bundle is produced by:
+#   uv run python scripts/run_prepare_sft.py --source eval
+#
+# SFT checkpoint paths are the expected outputs of the 5k / 20k / 50k data
+# scaling runs. Missing checkpoints are skipped by default so the pretrain
+# baseline can be scored before SFT training completes.
+model: configs/kestrel/50m/model.yaml
+tokenizer: checkpoints/tokenizer/tokenizer.json
+checkpoints:
+  - name: pretrain
+    path: checkpoints/pretrain/50m/final
+  - name: sft_5k
+    path: checkpoints/sft/50m/5k/final
+  - name: sft_20k
+    path: checkpoints/sft/50m/20k/final
+  - name: sft_50k
+    path: checkpoints/sft/50m/final
+data:
+  dir: data/sft/eval
+  max_rows_per_set: null
+generation:
+  max_tokens: 256
+  temperature: 0.0
+  repetition_penalty: 1.0
+  progress_every: 100
+perplexity:
+  enabled: true
+  pretrain_config: configs/kestrel/50m/pretrain.yaml
+  split: val
+  max_tokens: 100000
+output: data/sft/eval/scorecard.json
+on_missing_checkpoint: skip

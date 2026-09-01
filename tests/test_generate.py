@@ -6,6 +6,7 @@ tokenizer, no large model). A scripted stub model is used where a controlled
 token sequence is needed (exact max_tokens count, EOS early-stop).
 """
 
+import inspect
 from collections.abc import Callable
 
 import mlx.core as mx
@@ -178,3 +179,53 @@ def test_repetition_penalty_below_one_raises() -> None:
     model = _fixed_logits_model({1: 1.0})
     with pytest.raises(ValueError, match="repetition_penalty"):
         generate(model, tok, "a", max_tokens=1, temp=0.0, repetition_penalty=0.5)
+
+
+def test_generate_clear_cache_default_is_sixty_four() -> None:
+    parameter = inspect.signature(generate).parameters["clear_cache_every"]
+    assert parameter.default == 64
+
+
+def test_generate_clears_cache_on_configured_cadence(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    tok = _tiny_tokenizer()
+    calls: dict[str, int] = {"n": 0}
+    model = _scripted_model(1, [1] * 8, calls)
+    clear_calls: list[int] = []
+
+    def fake_clear_cache() -> None:
+        clear_calls.append(calls["n"])
+
+    monkeypatch.setattr(mx, "clear_cache", fake_clear_cache)
+
+    out = generate(model, tok, "a", max_tokens=8, temp=0.0, clear_cache_every=2)
+
+    assert out == "a a a a a a a a"
+    assert len(clear_calls) == 4
+
+
+def test_generate_clear_cache_disabled_when_zero(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    tok = _tiny_tokenizer()
+    calls: dict[str, int] = {"n": 0}
+    model = _scripted_model(1, [1] * 4, calls)
+    clear_calls: list[int] = []
+
+    def fake_clear_cache() -> None:
+        clear_calls.append(calls["n"])
+
+    monkeypatch.setattr(mx, "clear_cache", fake_clear_cache)
+
+    out = generate(model, tok, "a", max_tokens=4, temp=0.0, clear_cache_every=0)
+
+    assert out == "a a a a"
+    assert clear_calls == []
+
+
+def test_generate_negative_clear_cache_every_raises() -> None:
+    tok = _tiny_tokenizer()
+    model = _fixed_logits_model({1: 1.0})
+    with pytest.raises(ValueError, match="clear_cache_every"):
+        generate(model, tok, "a", max_tokens=1, temp=0.0, clear_cache_every=-1)

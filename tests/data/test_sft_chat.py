@@ -198,15 +198,33 @@ def test_render_tool_result_masks_tool_but_marks_final_answer() -> None:
 
 def test_render_text_contains_reserved_markers() -> None:
     tokenizer = _tiny_tokenizer()
-    rendered = render_sft(_tool_result_row(), tokenizer)
+    rendered = render_sft(_non_tool_row(), tokenizer)
 
     assert IM_START in rendered.text
-    assert IM_SYSTEM not in rendered.text
+    assert IM_SYSTEM in rendered.text
     assert IM_USER in rendered.text
     assert IM_ASSISTANT in rendered.text
-    assert TOOL_CALL in rendered.text
-    assert TOOL_RESPONSE in rendered.text
     assert IM_END in rendered.text
+
+
+def test_render_without_tools_omits_tool_block() -> None:
+    tokenizer = _tiny_tokenizer()
+    rendered = render_sft(_non_tool_row(), tokenizer)
+    assert "Available tools:" not in rendered.text
+
+
+def test_render_tools_adds_loss_masked_tool_block() -> None:
+    tokenizer = _tiny_tokenizer()
+    rendered = render_sft(_tool_call_row(), tokenizer)
+
+    assert "Available tools:" in rendered.text
+    assert '"get_weather"' in rendered.text
+
+    ids = rendered.token_ids
+    mask = rendered.loss_mask
+    system_index = ids.index(tokenizer.token_to_id(IM_SYSTEM))
+    tool_block_end = ids.index(tokenizer.token_to_id(IM_END), system_index)
+    assert all(loss == 0 for loss in mask[system_index : tool_block_end + 1])
 
 
 def _tools() -> list[ToolDefinition]:

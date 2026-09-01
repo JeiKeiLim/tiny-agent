@@ -113,6 +113,12 @@ def main() -> None:
         default=1.0,
         help="HF-style repetition penalty for generated tokens (1.0 = disabled)",
     )
+    parser.add_argument(
+        "--clear-cache-every",
+        type=int,
+        default=64,
+        help="release unused MLX cache every N generated tokens (0 = disabled)",
+    )
     args = parser.parse_args()
 
     tokenizer_path = Path(args.tokenizer)
@@ -135,6 +141,7 @@ def main() -> None:
             args.max_tokens,
             temp=args.temp,
             repetition_penalty=args.repetition_penalty,
+            clear_cache_every=args.clear_cache_every,
         )
         print(
             f"\ngenerated (max_tokens={args.max_tokens}, temp={args.temp}, "

@@ -147,11 +147,11 @@ def test_tool_result_tokens_are_not_trained(tmp_path: Path, tiny_tokenizer: Path
     }
     data = tmp_path / "sft.jsonl"
     _write_jsonl(data, [row])
-    dataset = SFTDataset(_config(data, tiny_tokenizer, batch_size=1, context_length=128))
+    dataset = SFTDataset(_config(data, tiny_tokenizer, batch_size=1, context_length=512))
 
     _, _, mask = next(iter(dataset))
     rendered = render_sft(SFTRow.model_validate(row), Tokenizer.from_file(str(tiny_tokenizer)))
-    expected = [*rendered.loss_mask[:-1], 0] + [0] * (128 - len(rendered.token_ids))
+    expected = [*rendered.loss_mask[:-1], 0] + [0] * (512 - len(rendered.token_ids))
     assert mask[0].tolist() == expected
 
 

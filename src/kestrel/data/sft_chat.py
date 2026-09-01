@@ -51,12 +51,25 @@ def _require_token_id(tokenizer: Tokenizer, token: str) -> int:
     return token_id
 
 
+def _tool_prompt_text(row: SFTRow) -> str:
+    tools = [
+        {
+            "name": tool.function.name,
+            "description": tool.function.description,
+            "parameters": tool.function.parameters,
+        }
+        for tool in row.tools
+    ]
+    return "Available tools:\n" + json.dumps(tools, ensure_ascii=False, separators=(",", ":"))
+
+
 def render_sft(row: SFTRow, tokenizer: Tokenizer) -> RenderedSFT:
     """Render a logical SFT row into token IDs, loss mask, and text.
 
     Assistant content and assistant tool-call payloads are marked with loss
     mask ``1``. System, user, tool, role markers, and structural markers are
-    masked with ``0``.
+    masked with ``0``. When ``row.tools`` is non-empty, a compact tool
+    definition block is rendered first as a loss-masked system message.
     """
     ids: list[int] = []
     mask: list[int] = []
@@ -78,6 +91,16 @@ def render_sft(row: SFTRow, tokenizer: Tokenizer) -> RenderedSFT:
         ids.extend(encoded)
         mask.extend([loss] * len(encoded))
         text_parts.append(text)
+
+    if row.tools:
+        add_special(IM_START, 0)
+        add_newline()
+        add_special(IM_SYSTEM, 0)
+        add_newline()
+        add_text(_tool_prompt_text(row), 0)
+        add_newline()
+        add_special(IM_END, 0)
+        add_newline()
 
     for message in row.messages:
         add_special(IM_START, 0)
@@ -137,7 +160,8 @@ def render_sft(row: SFTRow, tokenizer: Tokenizer) -> RenderedSFT:
     return RenderedSFT(tuple(ids), tuple(mask), "".join(text_parts))
 
 
-def _extract_payload(text: str) -> str:
+def extract_tool_call_payload(text: str) -> str:
+    """Return the rendered tool-call payload from generated assistant text."""
     start = text.find(TOOL_CALL)
     end = text.find(TOOL_CALL_END)
     if start != -1 and end != -1 and end > start:
@@ -224,7 +248,7 @@ def parse_tool_call(text: str, tools: list[ToolDefinition]) -> ParsedToolCall:
         ToolCallParseError: if the payload is missing, invalid JSON, uses an
             unknown tool name, or fails schema validation.
     """
-    payload = _extract_payload(text)
+    payload = extract_tool_call_payload(text)
     try:
         data = json.loads(payload)
     except json.JSONDecodeError as exc:

@@ -40,9 +40,9 @@ Kestrel trains a **pair of small decoder-only models (50M and 150M)** from scrat
 - **Pretrain entry point** — `scripts/run_pretrain.py` with `configs/kestrel/50m/pretrain.yaml` and `configs/kestrel/150m/pretrain.yaml`, plus `generate()` (`model/generate.py`) for autoregressive sampling.
 - **Pretrain evaluation** — read-only `scripts/eval_pretrain.py` reports token-weighted held-out loss, perplexity, bits/token, and per-domain loss for saved checkpoints.
 
-**Milestone M2 (SFT validation) is partially implemented:** the SFT chat renderer, masked SFT dataset, SFT trainer, raw SFT source prep (`scripts/run_prepare_sft.py`), held-out SFT eval bundle prep (`scripts/run_prepare_sft.py --source eval`), SFT mixture builder (`scripts/run_build_sft_mixture.py`), SFT training entry point (`scripts/run_sft.py`), and interactive SFT chat (`scripts/chat_sft.py`). Data prep supports public assistant, GSM8K, local rule-based tool, public tool, and an optional internal LLM source. The internal LLM source is disabled by default and reads endpoint, API key, and model name only from environment variables named in `configs/kestrel/sft_data.yaml`; `.env.example` lists the required variable names, and `.env` is gitignored.
+**Milestone M2 (SFT validation) is partially implemented:** the SFT chat renderer, masked SFT dataset, SFT trainer, raw SFT source prep (`scripts/run_prepare_sft.py`), held-out SFT eval bundle prep (`scripts/run_prepare_sft.py --source eval`), SFT mixture builder (`scripts/run_build_sft_mixture.py`), SFT training entry point (`scripts/run_sft.py`), interactive SFT chat (`scripts/chat_sft.py`), and the inference-only SFT eval harness + scorecard (`scripts/run_eval_sft.py`). Data prep supports public assistant, GSM8K, local rule-based tool, public tool, and an optional internal LLM source. The SFT chat renderer exposes `row.tools` as a compact loss-masked system block so tool schemas are part of both training and eval prompts. The internal LLM source is disabled by default and reads endpoint, API key, and model name only from environment variables named in `configs/kestrel/sft_data.yaml`; `.env.example` lists the required variable names, and `.env` is gitignored.
 
-**Planned, not yet built:** long-context, the broader SFT eval scorecard, RL, serve + agent, and Track B (PEFT/LoRA).
+**Planned, not yet built:** long-context, RL, serve + agent, and Track B (PEFT/LoRA).
 
 ## Repo layout
 
@@ -53,7 +53,7 @@ tiny-agent/
     kestrel/          # from-scratch (Track A) — family of 2 sizes
       corpus.yaml     # pretrain corpus (output: data/corpus-12g)
       sft_data.yaml   # SFT raw-source data prep, held-out eval bundle, and mixture recipe
-      50m/            # model.yaml, pretrain.yaml, sft.yaml
+      50m/            # model.yaml, pretrain.yaml, sft.yaml, eval_sft.yaml
       150m/           # model.yaml, pretrain.yaml, sft.yaml
   src/kestrel/
     common/           # config (YAML→Pydantic), logging
@@ -63,11 +63,12 @@ tiny-agent/
     data/             # tokenizer/pretrain/SFT datasets, chat rendering, SFT source prep/mixture
     train/            # trainer.py, pretrain.py, sft.py, checkpoint.py, rl/ (empty)
     tools/            # schema_sampler.py
-    eval/             # pretrain.py (checkpoint evaluation)
+    eval/             # pretrain.py, sft.py, tool_calling.py (checkpoint evaluation + SFT scorecard)
     peft/  env/  agent/  serve/   # planned (empty packages)
   scripts/            # build_corpus.py, check_model.py, run_pretrain.py,
                       # eval_pretrain.py, visualize_tokenizer.py, run_prepare_sft.py,
-                      # run_build_sft_mixture.py, run_sft.py, chat_sft.py
+                      # run_build_sft_mixture.py, run_sft.py, chat_sft.py,
+                      # run_eval_sft.py
   tests/
   data/  checkpoints/ # runtime artifacts (gitignored)
 ```
@@ -135,7 +136,7 @@ A standalone smoke-test CLI loads a model (random-init or from a checkpoint), ru
 uv run python scripts/check_model.py --config configs/kestrel/50m/model.yaml
 ```
 
-Add `--checkpoint <path>` to load a trained checkpoint instead of random init, and `--generate` to sample text after the report. On an untrained model the loss is ~ln(vocab) (~9.7 for 16k) and the top tokens are gibberish — expected, not a bug.
+Add `--checkpoint <path>` to load a trained checkpoint instead of random init, and `--generate` to sample text after the report. The current no-KV-cache generation path releases unused MLX allocator cache every `--clear-cache-every N` generated tokens (default `64`, `0` disables) to bound retained cache memory during long generations. On an untrained model the loss is ~ln(vocab) (~9.7 for 16k) and the top tokens are gibberish — expected, not a bug.
 
 ### Pretrain
 
@@ -204,6 +205,16 @@ uv run python scripts/run_sft.py --config configs/kestrel/50m/sft.yaml
 ```
 
 The 50M config expects the mixture file at `data/sft/mixture/sft-50k.jsonl`, produced by `scripts/run_build_sft_mixture.py`.
+
+### SFT eval
+
+The SFT scorecard evaluates checkpoints inference-only on the held-out bundle from `data/sft/eval/`:
+
+```bash
+uv run python scripts/run_eval_sft.py --config configs/kestrel/50m/eval_sft.yaml
+```
+
+It reports assistant sanity checks, GSM8K final-answer accuracy, local tool seen/unseen/no-call/missing-info metrics, and optional held-out pretrain perplexity. The committed 50M config scores the pretrain checkpoint plus the expected `5k`, `20k`, and `50k` SFT checkpoints; missing checkpoints are skipped by default so the pretrain baseline can be scored before SFT training completes. `--max-rows N` limits each eval set for smoke runs, `--output PATH` overrides the scorecard path, and `--skip-perplexity` skips the corpus perplexity measurement. The `generation.clear_cache_every` config field controls MLX allocator-cache release cadence during generation (default `64`, `0` disables).
 
 ### SFT chat
 

@@ -106,7 +106,7 @@ def test_prepare_public_tool_writes_manifest(
     config = SFTDataConfig(
         output_dir=str(tmp_path),
         tokenizer_path=str(tiny_sft_tokenizer),
-        context_length=2048,
+        context_length=8192,
         seed=7,
         public_tool=PublicToolSourceConfig(target_rows=10),
     )

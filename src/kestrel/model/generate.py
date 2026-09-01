@@ -46,6 +46,7 @@ def generate(
     temp: float = 0.0,
     stop_token_id: int | None = None,
     repetition_penalty: float = 1.0,
+    clear_cache_every: int = 64,
 ) -> str:
     """Generate text by repeatedly sampling the next token.
 
@@ -57,9 +58,16 @@ def generate(
     ``repetition_penalty`` is a decoding-side penalty for previously generated
     token IDs. ``1.0`` disables it; values greater than ``1.0`` make repeated
     tokens less likely.
+
+    ``clear_cache_every`` releases unused MLX allocator cache every N generated
+    tokens. The no-KV-cache path allocates growing temporary buffers each step,
+    so a positive cadence bounds retained cache memory. ``0`` disables clearing.
     """
     if repetition_penalty < 1.0:
         msg = f"repetition_penalty must be >= 1.0, got {repetition_penalty}"
+        raise ValueError(msg)
+    if clear_cache_every < 0:
+        msg = f"clear_cache_every must be >= 0, got {clear_cache_every}"
         raise ValueError(msg)
     if stop_token_id is None:
         stop_token_id = tokenizer.token_to_id(DEFAULT_STOP_TOKEN)
@@ -80,5 +88,7 @@ def generate(
             break
         generated.append(next_id)
         x = mx.concatenate([x, mx.array([[next_id]], dtype=mx.int32)], axis=1)
+        if clear_cache_every > 0 and len(generated) % clear_cache_every == 0:
+            mx.clear_cache()
 
     return tokenizer.decode(generated)

@@ -11,7 +11,7 @@ def _config(output_dir: Path, tokenizer_path: Path) -> SFTDataConfig:
     return SFTDataConfig(
         output_dir=str(output_dir),
         tokenizer_path=str(tokenizer_path),
-        context_length=2048,
+        context_length=8192,
         seed=3,
         tool=ToolSourceConfig(
             train=ToolTrainBreakdown(

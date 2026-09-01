@@ -38,7 +38,7 @@ def _gsm8k_row(question: str = "What is 1+1?") -> dict[str, object]:
 def _eval_config(tmp_path: Path, tiny_sft_tokenizer: Path) -> SFTDataConfig:
     return SFTDataConfig(
         tokenizer_path=str(tiny_sft_tokenizer),
-        context_length=1024,
+        context_length=8192,
         tool=ToolSourceConfig(eval=ToolEvalBreakdown(seen=2, unseen=2, no_call=1, missing_info=1)),
         eval=SFTDataEvalConfig(
             output_dir=str(tmp_path / "eval"),
