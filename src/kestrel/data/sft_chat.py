@@ -20,6 +20,7 @@ TOOL_CALL = DEFAULT_SPECIAL_TOKENS[5]
 TOOL_CALL_END = DEFAULT_SPECIAL_TOKENS[6]
 TOOL_RESPONSE = DEFAULT_SPECIAL_TOKENS[7]
 TOOL_RESPONSE_END = DEFAULT_SPECIAL_TOKENS[8]
+ASSISTANT_COMPLETION_PREFIX = f"{IM_START}\n{IM_ASSISTANT}\n"
 
 
 @dataclass(frozen=True)
@@ -158,6 +159,16 @@ def render_sft(row: SFTRow, tokenizer: Tokenizer) -> RenderedSFT:
                 add_newline()
 
     return RenderedSFT(tuple(ids), tuple(mask), "".join(text_parts))
+
+
+def completion_prompt_text(row: SFTRow, tokenizer: Tokenizer) -> str:
+    """Render prior chat messages and append the assistant completion prefix.
+
+    The SFT loss mask trains the model to generate assistant content after
+    ``im_start`` + newline + ``im_assistant`` + newline. Inference and eval
+    prompts must therefore provide that prefix explicitly.
+    """
+    return render_sft(row, tokenizer).text + ASSISTANT_COMPLETION_PREFIX
 
 
 def extract_tool_call_payload(text: str) -> str:

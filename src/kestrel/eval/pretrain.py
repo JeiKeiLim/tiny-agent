@@ -218,7 +218,14 @@ def _dataset_config(
 def _generate_samples(model: nn.Module, tokenizer_path: str) -> tuple[str, ...]:
     tokenizer = Tokenizer.from_file(tokenizer_path)
     return tuple(
-        generate(model, tokenizer, prompt, max_tokens=GENERATION_MAX_TOKENS, temp=0.0)
+        generate(
+            model,
+            tokenizer,
+            prompt,
+            max_tokens=GENERATION_MAX_TOKENS,
+            temp=0.0,
+            skip_special_tokens=True,
+        )
         for prompt in GENERATION_PROMPTS
     )
 

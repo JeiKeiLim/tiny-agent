@@ -8,6 +8,7 @@ from tokenizers.models import WordLevel
 from tokenizers.pre_tokenizers import Whitespace
 
 from kestrel.data.sft_chat import (
+    ASSISTANT_COMPLETION_PREFIX,
     IM_ASSISTANT,
     IM_END,
     IM_START,
@@ -19,6 +20,7 @@ from kestrel.data.sft_chat import (
     TOOL_RESPONSE_END,
     RenderedSFT,
     ToolCallParseError,
+    completion_prompt_text,
     parse_tool_call,
     render_sft,
     validate_arguments,
@@ -225,6 +227,33 @@ def test_render_tools_adds_loss_masked_tool_block() -> None:
     system_index = ids.index(tokenizer.token_to_id(IM_SYSTEM))
     tool_block_end = ids.index(tokenizer.token_to_id(IM_END), system_index)
     assert all(loss == 0 for loss in mask[system_index : tool_block_end + 1])
+
+
+def test_completion_prompt_text_appends_assistant_prefix() -> None:
+    tokenizer = _tiny_tokenizer()
+    row = SFTRow.model_validate(
+        {
+            "source": "assistant_public",
+            "messages": [{"role": "user", "content": "world"}],
+        }
+    )
+
+    prompt = completion_prompt_text(row, tokenizer)
+
+    assert prompt.endswith(ASSISTANT_COMPLETION_PREFIX)
+    assert prompt.count(IM_ASSISTANT) == 1
+    assert "world" in prompt
+
+
+def test_completion_prompt_text_preserves_prior_assistant_turns() -> None:
+    tokenizer = _tiny_tokenizer()
+    row = _non_tool_row()
+
+    prompt = completion_prompt_text(row, tokenizer)
+
+    assert prompt.endswith(ASSISTANT_COMPLETION_PREFIX)
+    assert prompt.count(IM_ASSISTANT) == 2
+    assert "hello world" in prompt
 
 
 def _tools() -> list[ToolDefinition]:

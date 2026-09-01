@@ -61,6 +61,7 @@ def _generate_no_cache(
     stop_token_id: int,
     repetition_penalty: float,
     clear_cache_every: int,
+    skip_special_tokens: bool,
 ) -> str:
     x = mx.array([tokenizer.encode(prompt, add_special_tokens=False).ids], dtype=mx.int32)
     generated: list[int] = []
@@ -75,7 +76,7 @@ def _generate_no_cache(
         if clear_cache_every > 0 and len(generated) % clear_cache_every == 0:
             mx.clear_cache()
 
-    return tokenizer.decode(generated)
+    return tokenizer.decode(generated, skip_special_tokens=skip_special_tokens)
 
 
 def _generate_with_cache(
@@ -87,6 +88,7 @@ def _generate_with_cache(
     stop_token_id: int,
     repetition_penalty: float,
     clear_cache_every: int,
+    skip_special_tokens: bool,
 ) -> str:
     x = mx.array([tokenizer.encode(prompt, add_special_tokens=False).ids], dtype=mx.int32)
     logits, caches = model.prefill(x, reserve=max_tokens)
@@ -102,7 +104,7 @@ def _generate_with_cache(
         if clear_cache_every > 0 and len(generated) % clear_cache_every == 0:
             mx.clear_cache()
 
-    return tokenizer.decode(generated)
+    return tokenizer.decode(generated, skip_special_tokens=skip_special_tokens)
 
 
 def generate(
@@ -114,6 +116,7 @@ def generate(
     stop_token_id: int | None = None,
     repetition_penalty: float = 1.0,
     clear_cache_every: int = 64,
+    skip_special_tokens: bool = False,
 ) -> str:
     """Generate text by repeatedly sampling the next token.
 
@@ -130,6 +133,10 @@ def generate(
     tokens. A positive cadence bounds retained temporary cache memory. ``0``
     disables clearing.
 
+    ``skip_special_tokens`` controls tokenizer decoding. It defaults to
+    ``False`` so chat/tool-call special tokens remain visible to eval and chat
+    helpers. Pass ``True`` for display-only callers that want clean text.
+
     Models exposing ``prefill`` and ``decode`` use the KV-cache path; other
     callable models use the no-cache fallback.
     """
@@ -140,7 +147,7 @@ def generate(
         msg = f"clear_cache_every must be >= 0, got {clear_cache_every}"
         raise ValueError(msg)
     if max_tokens <= 0:
-        return tokenizer.decode([])
+        return tokenizer.decode([], skip_special_tokens=skip_special_tokens)
     if stop_token_id is None:
         default_stop = tokenizer.token_to_id(DEFAULT_STOP_TOKEN)
         if default_stop is None:
@@ -158,6 +165,7 @@ def generate(
             stop_token_id,
             repetition_penalty,
             clear_cache_every,
+            skip_special_tokens,
         )
     return _generate_no_cache(
         model,
@@ -168,4 +176,5 @@ def generate(
         stop_token_id,
         repetition_penalty,
         clear_cache_every,
+        skip_special_tokens,
     )

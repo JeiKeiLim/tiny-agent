@@ -246,6 +246,7 @@ def test_generate_kestrel_matches_no_cache_fallback() -> None:
         tok.token_to_id("im_end"),
         1.0,
         0,
+        False,
     )
 
     assert cached == no_cache
@@ -346,3 +347,89 @@ def test_generate_zero_max_tokens_returns_empty_without_model_call() -> None:
     assert out == ""
     assert model.prefill_calls == 0
     assert model.decode_calls == 0
+
+
+SPECIAL_VOCAB = {"[UNK]": 0, "a": 1, "tool_call": 2, "im_end": 3}
+SPECIAL_V = len(SPECIAL_VOCAB)
+
+
+def _special_tokenizer() -> Tokenizer:
+    tok = Tokenizer(WordLevel(vocab=dict(SPECIAL_VOCAB), unk_token="[UNK]"))
+    tok.pre_tokenizer = Whitespace()
+    tok.add_special_tokens(["tool_call", "im_end"])
+    return tok
+
+
+def _special_no_cache_model(script: list[int]) -> Callable[[mx.array], mx.array]:
+    prompt_len = 1
+
+    def model(x: mx.array) -> mx.array:
+        n_gen = x.shape[1] - prompt_len
+        logits = mx.zeros((1, x.shape[1], SPECIAL_V))
+        logits[0, -1, script[n_gen] if n_gen < len(script) else 0] = 10.0
+        return logits
+
+    return model
+
+
+class _SpecialScriptedCachedModel:
+    def __init__(self, script: list[int]) -> None:
+        self.script = script
+        self.prefill_calls = 0
+        self.decode_calls = 0
+        self._decode_index = 0
+
+    def _logits(self) -> mx.array:
+        logits = mx.zeros((1, 1, SPECIAL_V))
+        if self._decode_index < len(self.script):
+            logits[0, 0, self.script[self._decode_index]] = 10.0
+        return logits
+
+    def prefill(self, x: mx.array, reserve: int = 0) -> tuple[mx.array, list[object]]:
+        self.prefill_calls += 1
+        return self._logits(), []
+
+    def decode(self, x: mx.array, caches: list[object]) -> tuple[mx.array, list[object]]:
+        self.decode_calls += 1
+        self._decode_index += 1
+        return self._logits(), caches
+
+
+def test_generate_no_cache_preserves_special_tokens_by_default() -> None:
+    tok = _special_tokenizer()
+    model = _special_no_cache_model([2, 1])
+
+    out = generate(model, tok, "a", max_tokens=2, temp=0.0)
+
+    assert out == "tool_call a"
+
+
+def test_generate_no_cache_can_skip_special_tokens() -> None:
+    tok = _special_tokenizer()
+    model = _special_no_cache_model([2, 1])
+
+    out = generate(model, tok, "a", max_tokens=2, temp=0.0, skip_special_tokens=True)
+
+    assert "tool_call" not in out
+    assert "a" in out
+
+
+def test_generate_cached_path_preserves_special_tokens_by_default() -> None:
+    tok = _special_tokenizer()
+    model = _SpecialScriptedCachedModel([2, 1])
+
+    out = generate(model, tok, "a", max_tokens=2, temp=0.0)
+
+    assert out == "tool_call a"
+    assert model.prefill_calls == 1
+    assert model.decode_calls == 2
+
+
+def test_generate_cached_path_can_skip_special_tokens() -> None:
+    tok = _special_tokenizer()
+    model = _SpecialScriptedCachedModel([2, 1])
+
+    out = generate(model, tok, "a", max_tokens=2, temp=0.0, skip_special_tokens=True)
+
+    assert "tool_call" not in out
+    assert "a" in out

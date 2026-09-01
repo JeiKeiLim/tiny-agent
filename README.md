@@ -216,6 +216,8 @@ uv run python scripts/run_eval_sft.py --config configs/kestrel/50m/eval_sft.yaml
 
 It reports assistant sanity checks, GSM8K final-answer accuracy, local tool seen/unseen/no-call/missing-info metrics, and optional held-out pretrain perplexity. The committed 50M config scores the pretrain checkpoint plus the expected `5k`, `20k`, and `50k` SFT checkpoints; missing checkpoints are skipped by default so the pretrain baseline can be scored before SFT training completes. `--max-rows N` limits each eval set for smoke runs, `--output PATH` overrides the scorecard path, and `--skip-perplexity` skips the corpus perplexity measurement. Generation uses the Kestrel KV-cache path when available. The `generation.clear_cache_every` config field controls temporary MLX allocator-cache release cadence during generation (default `64`, `0` disables).
 
+Eval prompts append the loss-masked assistant role prefix (`im_start` + `im_assistant`) so inference matches the training prompt contract. `generate()` preserves tokenizer special tokens by default so tool-call markers remain parseable; display-only callers can pass `skip_special_tokens=True`.
+
 ### SFT chat
 
 A manual multi-turn chat CLI renders prompts with the same SFT chat template used during training:
@@ -224,7 +226,7 @@ A manual multi-turn chat CLI renders prompts with the same SFT chat template use
 uv run python scripts/chat_sft.py --checkpoint checkpoints/sft/50m/final
 ```
 
-It is for inspection only and does not expose tool calling.
+It appends the assistant role prefix before generation, extracts printable assistant content, and masks special tokens for display. It is for inspection only and does not expose tool calling.
 
 ### Training dashboard
 

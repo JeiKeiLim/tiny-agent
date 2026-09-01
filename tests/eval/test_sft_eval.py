@@ -11,17 +11,23 @@ from typing import Any
 
 import pytest
 import yaml
+from tokenizers import Tokenizer
+from tokenizers.models import WordLevel
+from tokenizers.pre_tokenizers import Whitespace
 
 from kestrel.common.config import load_config
 from kestrel.corpus.builder import build as build_corpus
 from kestrel.corpus.config import ComponentConfig, CorpusConfig, LocalSourceConfig
-from kestrel.data.sft_schema import ToolDefinition
+from kestrel.data.sft_chat import IM_ASSISTANT, IM_START
+from kestrel.data.sft_schema import SFTRow, ToolDefinition
 from kestrel.eval.sft import (
+    EvalCase,
     SFTCheckpointEntry,
     SFTEvalConfig,
     _extract_final_number,
     _has_obvious_repetition,
     _perplexity_metrics,
+    _prompt_text,
     evaluate_sft,
     write_scorecard,
 )
@@ -29,7 +35,7 @@ from kestrel.eval.tool_calling import parse_generated_tool_call
 from kestrel.model.config import ModelConfig
 from kestrel.model.io import save as save_model
 from kestrel.model.kestrel import Kestrel
-from kestrel.tokenizer.config import TokenizerConfig
+from kestrel.tokenizer.config import DEFAULT_SPECIAL_TOKENS, TokenizerConfig
 from kestrel.tokenizer.train import train as train_tokenizer
 from kestrel.train.pretrain import PretrainConfig
 from kestrel.train.trainer import TrainerConfig
@@ -66,7 +72,7 @@ def _tiny_model_config() -> ModelConfig:
     return ModelConfig(
         name="tiny",
         vocab_size=400,
-        context_length=32,
+        context_length=64,
         n_layers=2,
         n_heads=4,
         n_kv_heads=2,
@@ -309,6 +315,39 @@ def _load_cli() -> Any:
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
     return module
+
+
+def _prompt_tokenizer() -> Tokenizer:
+    vocab: dict[str, int] = {"[UNK]": 0, "hello": 1, "world": 2}
+    for index, token in enumerate(DEFAULT_SPECIAL_TOKENS, start=3):
+        vocab[token] = index
+    tokenizer = Tokenizer(WordLevel(vocab=vocab, unk_token="[UNK]"))
+    tokenizer.pre_tokenizer = Whitespace()
+    return tokenizer
+
+
+def test_prompt_text_appends_assistant_completion_prefix() -> None:
+    row = SFTRow.model_validate(
+        {
+            "source": "assistant_eval",
+            "messages": [
+                {"role": "user", "content": "hello"},
+                {"role": "assistant", "content": "world"},
+            ],
+        }
+    )
+    case = EvalCase(
+        category="assistant",
+        row=row,
+        target_index=1,
+        expected_content="world",
+    )
+
+    prompt = _prompt_text(case, _prompt_tokenizer())
+
+    assert prompt.endswith(f"{IM_START}\n{IM_ASSISTANT}\n")
+    assert "hello" in prompt
+    assert "world" not in prompt
 
 
 def test_parse_generated_tool_call_accepts_valid_call() -> None:

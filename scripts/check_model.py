@@ -142,6 +142,7 @@ def main() -> None:
             temp=args.temp,
             repetition_penalty=args.repetition_penalty,
             clear_cache_every=args.clear_cache_every,
+            skip_special_tokens=True,
         )
         print(
             f"\ngenerated (max_tokens={args.max_tokens}, temp={args.temp}, "

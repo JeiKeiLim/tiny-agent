@@ -15,7 +15,7 @@ from kestrel.data.sft_chat import IM_ASSISTANT, IM_END, IM_START, IM_USER
 from kestrel.tokenizer.config import DEFAULT_SPECIAL_TOKENS
 
 
-def test_build_chat_prompt_contains_user_turn_but_not_assistant(
+def test_build_chat_prompt_appends_assistant_completion_prefix(
     tiny_sft_tokenizer_obj: Tokenizer,
 ) -> None:
     prompt = build_chat_prompt(
@@ -25,7 +25,7 @@ def test_build_chat_prompt_contains_user_turn_but_not_assistant(
     assert IM_START in prompt
     assert IM_USER in prompt
     assert "What is 2+2?" in prompt
-    assert IM_ASSISTANT not in prompt
+    assert prompt.endswith(f"{IM_START}\n{IM_ASSISTANT}\n")
 
 
 def test_build_chat_prompt_includes_previous_assistant_turn(
@@ -40,9 +40,10 @@ def test_build_chat_prompt_includes_previous_assistant_turn(
     prompt = build_chat_prompt(messages, tiny_sft_tokenizer_obj)
 
     assert prompt.count(IM_USER) == 2
-    assert prompt.count(IM_ASSISTANT) == 1
+    assert prompt.count(IM_ASSISTANT) == 2
     assert "hello world" in prompt
     assert "again" in prompt
+    assert prompt.endswith(f"{IM_START}\n{IM_ASSISTANT}\n")
 
 
 def test_build_chat_prompt_supports_system_message(tiny_sft_tokenizer_obj: Tokenizer) -> None:

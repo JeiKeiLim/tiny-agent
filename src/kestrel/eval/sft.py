@@ -15,7 +15,7 @@ from tokenizers import Tokenizer
 
 from kestrel.common.config import BaseConfig, load_config
 from kestrel.data.chat import extract_assistant_content
-from kestrel.data.sft_chat import TOOL_CALL, render_sft
+from kestrel.data.sft_chat import TOOL_CALL, completion_prompt_text
 from kestrel.data.sft_schema import AssistantMessage, SFTRow
 from kestrel.eval.pretrain import evaluate_checkpoint
 from kestrel.eval.tool_calling import (
@@ -307,7 +307,7 @@ def _prompt_text(case: EvalCase, tokenizer: Tokenizer) -> str:
             ],
         }
     )
-    return render_sft(prompt_row, tokenizer).text
+    return completion_prompt_text(prompt_row, tokenizer)
 
 
 def _generate_output(
