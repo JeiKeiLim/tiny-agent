@@ -1,0 +1,753 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>RoPE core mechanism, distance, periodicity, and training</title>
+  <style>
+    :root { color-scheme: dark; }
+    body {
+      margin: 0;
+      background: #0b1020;
+      color: #e6eefc;
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+    }
+    .container { max-width: 1150px; margin: 0 auto; padding: 24px; }
+    h1 { font-size: 30px; margin-bottom: 8px; }
+    h2 { font-size: 22px; margin-top: 0; }
+    h3 { font-size: 17px; margin-top: 0; }
+    .subtitle { color: #9fb3d1; margin-top: 0; line-height: 1.5; }
+    .panel {
+      background: #111827;
+      border: 1px solid #263248;
+      border-radius: 14px;
+      padding: 16px;
+      margin: 16px 0;
+    }
+    canvas {
+      width: 100%;
+      height: auto;
+      background: #0f172a;
+      border-radius: 10px;
+      border: 1px solid #1f2a3c;
+      display: block;
+    }
+    .controls { display: flex; flex-wrap: wrap; gap: 16px; margin: 12px 0; align-items: center; }
+    label { display: flex; flex-direction: column; font-size: 13px; gap: 6px; color: #cbd5e1; }
+    input[type="range"] { width: 190px; }
+    .inline-label { display: flex; flex-direction: row; align-items: center; gap: 8px; font-size: 14px; color: #cbd5e1; }
+    .stat {
+      font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+      background: #0f172a;
+      border: 1px solid #1f2a3c;
+      padding: 8px 10px;
+      border-radius: 8px;
+      min-width: 180px;
+    }
+    .row { display: flex; gap: 16px; flex-wrap: wrap; }
+    .col { flex: 1 1 320px; min-width: 280px; }
+    .note { color: #9fb3d1; font-size: 14px; line-height: 1.55; }
+    .token-btn {
+      background: #1f2a3c;
+      color: #e6eefc;
+      border: 1px solid #334155;
+      border-radius: 8px;
+      padding: 6px 10px;
+      margin: 4px 6px 0 0;
+      cursor: pointer;
+    }
+    .token-btn.active { background: #2563eb; border-color: #3b82f6; }
+    code {
+      background: #0f172a;
+      padding: 2px 5px;
+      border-radius: 4px;
+      font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+      font-size: 13px;
+    }
+    .cards { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 10px; }
+    .card {
+      background: #0f172a;
+      border: 1px solid #1f2a3c;
+      padding: 12px;
+      border-radius: 10px;
+      color: #cbd5e1;
+      font-size: 14px;
+      line-height: 1.45;
+    }
+    .card b { color: #e6eefc; }
+    .flow { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; margin: 10px 0; }
+    .node {
+      padding: 8px 10px;
+      border-radius: 8px;
+      border: 1px solid #334155;
+      background: #1f2937;
+      font-size: 13px;
+    }
+    .node.fixed { background: #3f2f12; border-color: #a16207; }
+    .node.learned { background: #1e3a8a; border-color: #3b82f6; }
+    .arrow { color: #9fb3d1; }
+    .small { font-size: 13px; color: #9fb3d1; }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <h1>RoPE core mechanism, distance, periodicity, and training</h1>
+    <p class="subtitle">
+      This version leads with the general RoPE mechanism instead of a specific example.
+      It explains how q/k rotation creates relative-position-aware attention scores,
+      what happens at 360°, why real multi-frequency RoPE does not simply reset,
+      and how training interacts with the fixed rotation.
+    </p>
+
+    <div class="panel">
+      <h2>Core ideas</h2>
+      <div class="cards">
+        <div class="card"><b>Attention score</b><br>One query vector and one key vector produce one scalar: <code>q·k</code>.</div>
+        <div class="card"><b>RoPE</b><br>Rotates each token’s q and k by an amount determined by that token’s position.</div>
+        <div class="card"><b>Relative position</b><br>The rotated dot product depends mainly on position difference, not absolute position.</div>
+        <div class="card"><b>Single frequency</b><br>If only one rotation frequency exists, the signal is periodic and can repeat after 360°.</div>
+        <div class="card"><b>Multi-frequency RoPE</b><br>Real RoPE uses many frequencies, so the full pattern does not simply reset at one 360° event.</div>
+        <div class="card"><b>Training</b><br>Gradients flow through RoPE, but the rotation frequencies are fixed; q/k projections are learned.</div>
+      </div>
+    </div>
+
+    <div class="panel">
+      <h2>1. General mechanism: position rotates q and k</h2>
+      <p class="note">
+        For a query at position <code>m</code> and a key at position <code>n</code>, RoPE rotates their vectors.
+        The dot product depends on the angle difference, which contains <code>m - n</code>.
+      </p>
+      <div class="controls">
+        <label>Query position m
+          <input id="m" type="range" min="0" max="20" value="10" step="1">
+        </label>
+        <label>Key position n
+          <input id="n" type="range" min="0" max="20" value="4" step="1">
+        </label>
+        <label>Single rotation frequency θ
+          <input id="theta" type="range" min="0.10" max="1.50" value="0.60" step="0.01">
+        </label>
+        <label>Content mismatch
+          <input id="delta" type="range" min="-90" max="90" value="0" step="1">
+        </label>
+      </div>
+      <div class="row">
+        <div class="col">
+          <canvas id="vectorCanvas" width="900" height="380"></canvas>
+        </div>
+        <div class="col">
+          <div class="stat">q angle: <span id="qAngle"></span></div>
+          <div class="stat">k angle: <span id="kAngle"></span></div>
+          <div class="stat">angle difference: <span id="angleDiff"></span></div>
+          <div class="stat">q·k scalar: <span id="dotValue"></span></div>
+          <div class="stat">single-frequency period: <span id="periodValue"></span></div>
+          <p class="note">
+            The dashed arrows are content-only. The solid arrows are rotated by position.
+          </p>
+        </div>
+      </div>
+    </div>
+
+    <div class="panel">
+      <h2>2. Your 360° question: one frequency does repeat</h2>
+      <p class="note">
+        If RoPE used only one frequency, then yes: when the rotation angle changes by 360°
+        (<code>2π</code> radians), that frequency’s score repeats.
+        The period in tokens is:
+      </p>
+      <div class="stat">
+        period = 2π / θ = <span id="periodFormula"></span> tokens
+      </div>
+      <canvas id="periodCanvas" width="900" height="380"></canvas>
+      <p class="note">
+        The yellow markers are distances where the single-frequency angle has completed another full 360° cycle.
+        At those distances, that one frequency sees the same alignment again.
+      </p>
+    </div>
+
+    <div class="panel">
+      <h2>3. Real RoPE uses many frequencies, so the full signal does not simply reset</h2>
+      <p class="note">
+        A real RoPE head rotates many dimension pairs at different frequencies.
+        Think of it as many clocks spinning at different speeds.
+        One clock may complete 360°, but the others generally will not.
+      </p>
+      <canvas id="multiCanvas" width="900" height="420"></canvas>
+      <p class="note">
+        The thin lines are individual frequency components. The thick green line is their combined RoPE-like score.
+        The combined signal is much less likely to exactly repeat at a single 360° event.
+      </p>
+    </div>
+
+    <div class="panel">
+      <h2>4. From rotated q/k to attention weights</h2>
+      <p class="note">
+        This is the general attention-weight view. Each allowed key gets a scalar score.
+        With RoPE off and same content, scores are equal. With RoPE on, scores become distance-dependent.
+      </p>
+      <div class="controls">
+        <div id="genQueryBtns"></div>
+        <label class="inline-label"><input id="genRope" type="checkbox" checked /> Use multi-frequency RoPE</label>
+        <label class="inline-label"><input id="genSame" type="checkbox" checked /> Same content</label>
+      </div>
+      <canvas id="genCanvas" width="900" height="470"></canvas>
+      <div class="stat">Explanation: <span id="genExplanation"></span></div>
+    </div>
+
+    <div class="panel">
+      <h2>5. Training: what changes and what stays fixed?</h2>
+      <p class="note">
+        RoPE is differentiable, so backprop flows through it. But the rotation table is not a learned parameter.
+      </p>
+      <h3>Forward</h3>
+      <div class="flow">
+        <div class="node learned">Token embeddings</div>
+        <div class="arrow">→</div>
+        <div class="node learned">q_proj / k_proj / v_proj</div>
+        <div class="arrow">→</div>
+        <div class="node fixed">RoPE rotation, fixed frequencies</div>
+        <div class="arrow">→</div>
+        <div class="node">q·k scores</div>
+        <div class="arrow">→</div>
+        <div class="node">softmax + value mixing</div>
+        <div class="arrow">→</div>
+        <div class="node">loss</div>
+      </div>
+      <h3>Backward</h3>
+      <div class="flow">
+        <div class="node">loss</div>
+        <div class="arrow">→</div>
+        <div class="node">attention gradients</div>
+        <div class="arrow">→</div>
+        <div class="node">gradients wrt rotated q/k</div>
+        <div class="arrow">→</div>
+        <div class="node fixed">through fixed RoPE math</div>
+        <div class="arrow">→</div>
+        <div class="node learned">update q/k/v projections + embeddings</div>
+      </div>
+      <p class="note">
+        The model learns q/k vectors that are useful when passed through the fixed positional rotation.
+      </p>
+    </div>
+
+    <div class="panel">
+      <h2>6. Example: placement changes causal context</h2>
+      <p class="note">
+        This is an application, not the core mechanism.
+        The same words can have different attention contexts depending on where they appear in a causal sequence.
+      </p>
+      <div class="controls">
+        <button class="token-btn active" id="ctxA">random * 8 → Apple Juice</button>
+        <button class="token-btn" id="ctxB">Apple Juice → random * 8</button>
+        <label class="inline-label"><input id="ctxRope" type="checkbox" checked /> Use RoPE</label>
+        <div id="ctxQueryBtns"></div>
+      </div>
+      <canvas id="ctxCanvas" width="900" height="470"></canvas>
+      <div class="stat">Explanation: <span id="ctxExplanation"></span></div>
+    </div>
+  </div>
+
+  <script>
+    const $ = (id) => document.getElementById(id);
+    const multiFreqs = [1.0, 0.316, 0.1, 0.0316];
+
+    function ropeScore(delta, distance) {
+      let sum = 0;
+      for (const f of multiFreqs) sum += Math.cos(delta + distance * f);
+      return sum / multiFreqs.length;
+    }
+
+    function softmax(values) {
+      const max = Math.max(...values);
+      const exps = values.map((v) => Math.exp(v - max));
+      const sum = exps.reduce((a, b) => a + b, 0);
+      return exps.map((e) => e / sum);
+    }
+
+    function arrow(ctx, cx, cy, angle, length, color, label, dashed = false) {
+      const x = cx + length * Math.cos(angle);
+      const y = cy - length * Math.sin(angle);
+      ctx.save();
+      ctx.strokeStyle = color;
+      ctx.fillStyle = color;
+      ctx.lineWidth = 3;
+      if (dashed) ctx.setLineDash([7, 7]);
+      ctx.beginPath();
+      ctx.moveTo(cx, cy);
+      ctx.lineTo(x, y);
+      ctx.stroke();
+      ctx.setLineDash([]);
+
+      const canvasAngle = Math.atan2(y - cy, x - cx);
+      const head = 11;
+      ctx.beginPath();
+      ctx.moveTo(x, y);
+      ctx.lineTo(x - head * Math.cos(canvasAngle - 0.38), y - head * Math.sin(canvasAngle - 0.38));
+      ctx.lineTo(x - head * Math.cos(canvasAngle + 0.38), y - head * Math.sin(canvasAngle + 0.38));
+      ctx.closePath();
+      ctx.fill();
+
+      if (label) {
+        ctx.font = "14px -apple-system, sans-serif";
+        ctx.textAlign = "left";
+        ctx.textBaseline = "middle";
+        ctx.fillText(label, x + 10, y);
+      }
+      ctx.restore();
+    }
+
+    function drawSequenceAttention(canvas, rows, queryIndex) {
+      const ctx = canvas.getContext("2d");
+      const W = canvas.width;
+      const H = canvas.height;
+      ctx.clearRect(0, 0, W, H);
+
+      const left = 70;
+      const right = 30;
+      const top = 105;
+      const bottom = 55;
+      const chartW = W - left - right;
+      const chartH = H - top - bottom;
+      const slot = chartW / rows.length;
+
+      ctx.strokeStyle = "#1f2a3c";
+      ctx.fillStyle = "#9fb3d1";
+      ctx.font = "12px -apple-system, sans-serif";
+
+      for (let g = 0; g <= 1; g += 0.25) {
+        const y = top + chartH * (1 - g);
+        ctx.beginPath();
+        ctx.moveTo(left, y);
+        ctx.lineTo(W - right, y);
+        ctx.stroke();
+        ctx.textAlign = "right";
+        ctx.textBaseline = "middle";
+        ctx.fillText(g.toFixed(2), left - 8, y);
+      }
+
+      rows.forEach((row, i) => {
+        const cx = left + slot * i + slot / 2;
+        const boxW = Math.min(58, slot * 0.72);
+
+        ctx.fillStyle = i === queryIndex ? "#2563eb" : row.allowed ? "#334155" : "#1f2937";
+        ctx.fillRect(cx - boxW / 2, 35, boxW, 30);
+
+        ctx.fillStyle = "#e6eefc";
+        ctx.textAlign = "center";
+        ctx.textBaseline = "middle";
+        ctx.fillText(row.label, cx, 48);
+
+        ctx.fillStyle = "#9fb3d1";
+        ctx.fillText(`pos ${row.pos}`, cx, 78);
+
+        const x = left + slot * i + slot * 0.2;
+        const bw = slot * 0.6;
+
+        if (!row.allowed) {
+          ctx.fillStyle = "#111827";
+          ctx.fillRect(x, top + chartH - 4, bw, 4);
+          ctx.fillStyle = "#64748b";
+          ctx.textAlign = "center";
+          ctx.textBaseline = "middle";
+          ctx.fillText("masked", cx, top + chartH / 2);
+          return;
+        }
+
+        const h = row.weight * chartH;
+        ctx.fillStyle = `hsl(205, 100%, ${30 + 50 * row.weight}%)`;
+        ctx.fillRect(x, top + chartH - h, bw, h);
+
+        const labelY = Math.max(top + 6, top + chartH - h - 12);
+        ctx.fillStyle = "#e6eefc";
+        ctx.textAlign = "center";
+        ctx.textBaseline = "middle";
+        ctx.fillText(`${(row.weight * 100).toFixed(0)}%`, cx, labelY);
+
+        ctx.fillStyle = "#9fb3d1";
+        ctx.fillText(`d=${row.distance}`, cx, top + chartH + 18);
+      });
+
+      ctx.save();
+      ctx.translate(20, top + chartH / 2);
+      ctx.rotate(-Math.PI / 2);
+      ctx.textAlign = "center";
+      ctx.textBaseline = "middle";
+      ctx.fillStyle = "#9fb3d1";
+      ctx.fillText("attention weight", 0, 0);
+      ctx.restore();
+    }
+
+    function updateVector() {
+      const canvas = $("vectorCanvas");
+      const ctx = canvas.getContext("2d");
+      const W = canvas.width;
+      const H = canvas.height;
+      ctx.clearRect(0, 0, W, H);
+
+      const cx = 245;
+      const cy = 190;
+      const R = 130;
+
+      ctx.strokeStyle = "#263248";
+      ctx.lineWidth = 1;
+      ctx.beginPath();
+      ctx.arc(cx, cy, R, 0, Math.PI * 2);
+      ctx.stroke();
+
+      ctx.beginPath();
+      ctx.moveTo(cx - R - 25, cy);
+      ctx.lineTo(cx + R + 25, cy);
+      ctx.moveTo(cx, cy - R - 25);
+      ctx.lineTo(cx, cy + R + 25);
+      ctx.stroke();
+
+      const m = Number($("m").value);
+      const n = Number($("n").value);
+      const theta = Number($("theta").value);
+      const delta = Number($("delta").value) * Math.PI / 180;
+
+      const qAngle = m * theta;
+      const kAngle = -delta + n * theta;
+      const dot = Math.cos(qAngle - kAngle);
+      const period = (2 * Math.PI) / theta;
+
+      arrow(ctx, cx, cy, 0, R * 0.52, "#64748b", "base q", true);
+      arrow(ctx, cx, cy, -delta, R * 0.52, "#64748b", "base k", true);
+      arrow(ctx, cx, cy, qAngle, R, "#38bdf8", `q pos ${m}`);
+      arrow(ctx, cx, cy, kAngle, R, "#fb923c", `k pos ${n}`);
+
+      const deg = (x) => `${((x * 180) / Math.PI).toFixed(1)}°`;
+      $("qAngle").textContent = deg(qAngle);
+      $("kAngle").textContent = deg(kAngle);
+      $("angleDiff").textContent = deg(qAngle - kAngle);
+      $("dotValue").textContent = dot.toFixed(3);
+      $("periodValue").textContent = `${period.toFixed(2)} tokens`;
+      $("periodFormula").textContent = period.toFixed(2);
+    }
+
+    function updatePeriod() {
+      const canvas = $("periodCanvas");
+      const ctx = canvas.getContext("2d");
+      const W = canvas.width;
+      const H = canvas.height;
+      ctx.clearRect(0, 0, W, H);
+
+      const pad = { left: 58, right: 24, top: 34, bottom: 46 };
+      const xMax = 30;
+      const yMin = -1.25;
+      const yMax = 1.25;
+
+      const xToPx = (x) => pad.left + (x / xMax) * (W - pad.left - pad.right);
+      const yToPx = (y) => pad.top + ((yMax - y) / (yMax - yMin)) * (H - pad.top - pad.bottom);
+
+      ctx.strokeStyle = "#1f2a3c";
+      ctx.fillStyle = "#9fb3d1";
+      ctx.font = "13px -apple-system, sans-serif";
+
+      for (let y = -1; y <= 1; y += 0.5) {
+        ctx.beginPath();
+        ctx.moveTo(pad.left, yToPx(y));
+        ctx.lineTo(W - pad.right, yToPx(y));
+        ctx.stroke();
+        ctx.textAlign = "right";
+        ctx.textBaseline = "middle";
+        ctx.fillText(y.toFixed(1), pad.left - 8, yToPx(y));
+      }
+
+      for (let x = 0; x <= xMax; x += 5) {
+        ctx.beginPath();
+        ctx.moveTo(xToPx(x), pad.top);
+        ctx.lineTo(xToPx(x), H - pad.bottom);
+        ctx.stroke();
+        ctx.textAlign = "center";
+        ctx.textBaseline = "top";
+        ctx.fillText(String(x), xToPx(x), H - pad.bottom + 8);
+      }
+
+      ctx.textAlign = "center";
+      ctx.fillText("distance r", W / 2, H - 18);
+
+      const theta = Number($("theta").value);
+      const delta = Number($("delta").value) * Math.PI / 180;
+      const period = (2 * Math.PI) / theta;
+
+      ctx.strokeStyle = "#38bdf8";
+      ctx.lineWidth = 3;
+      ctx.beginPath();
+      for (let x = 0; x <= xMax; x += 0.05) {
+        const y = Math.cos(delta + x * theta);
+        if (x === 0) ctx.moveTo(xToPx(x), yToPx(y));
+        else ctx.lineTo(xToPx(x), yToPx(y));
+      }
+      ctx.stroke();
+
+      ctx.strokeStyle = "#facc15";
+      ctx.lineWidth = 2;
+      for (let k = 1; k * period <= xMax; k++) {
+        const x = k * period;
+        ctx.beginPath();
+        ctx.moveTo(xToPx(x), pad.top);
+        ctx.lineTo(xToPx(x), H - pad.bottom);
+        ctx.stroke();
+
+        ctx.fillStyle = "#facc15";
+        ctx.textAlign = "left";
+        ctx.textBaseline = "top";
+        ctx.fillText(`${k * 360}°`, xToPx(x) + 4, pad.top + 4 + (k % 2) * 18);
+      }
+
+      ctx.fillStyle = "#38bdf8";
+      ctx.textAlign = "left";
+      ctx.textBaseline = "top";
+      ctx.fillText("single-frequency score", pad.left + 8, pad.top + 4);
+    }
+
+    function updateMulti() {
+      const canvas = $("multiCanvas");
+      const ctx = canvas.getContext("2d");
+      const W = canvas.width;
+      const H = canvas.height;
+      ctx.clearRect(0, 0, W, H);
+
+      const pad = { left: 58, right: 24, top: 34, bottom: 46 };
+      const xMax = 30;
+      const yMin = -1.25;
+      const yMax = 1.25;
+
+      const xToPx = (x) => pad.left + (x / xMax) * (W - pad.left - pad.right);
+      const yToPx = (y) => pad.top + ((yMax - y) / (yMax - yMin)) * (H - pad.top - pad.bottom);
+
+      ctx.strokeStyle = "#1f2a3c";
+      ctx.fillStyle = "#9fb3d1";
+      ctx.font = "13px -apple-system, sans-serif";
+
+      for (let y = -1; y <= 1; y += 0.5) {
+        ctx.beginPath();
+        ctx.moveTo(pad.left, yToPx(y));
+        ctx.lineTo(W - pad.right, yToPx(y));
+        ctx.stroke();
+        ctx.textAlign = "right";
+        ctx.textBaseline = "middle";
+        ctx.fillText(y.toFixed(1), pad.left - 8, yToPx(y));
+      }
+
+      for (let x = 0; x <= xMax; x += 5) {
+        ctx.beginPath();
+        ctx.moveTo(xToPx(x), pad.top);
+        ctx.lineTo(xToPx(x), H - pad.bottom);
+        ctx.stroke();
+        ctx.textAlign = "center";
+        ctx.textBaseline = "top";
+        ctx.fillText(String(x), xToPx(x), H - pad.bottom + 8);
+      }
+
+      ctx.textAlign = "center";
+      ctx.fillText("distance r", W / 2, H - 18);
+
+      const componentColors = ["#60a5fa", "#fbbf24", "#f87171", "#a78bfa"];
+      multiFreqs.forEach((f, idx) => {
+        ctx.strokeStyle = componentColors[idx];
+        ctx.lineWidth = 1.5;
+        ctx.globalAlpha = 0.55;
+        ctx.beginPath();
+        for (let x = 0; x <= xMax; x += 0.05) {
+          const y = Math.cos(x * f);
+          if (x === 0) ctx.moveTo(xToPx(x), yToPx(y));
+          else ctx.lineTo(xToPx(x), yToPx(y));
+        }
+        ctx.stroke();
+        ctx.globalAlpha = 1;
+      });
+
+      ctx.strokeStyle = "#34d399";
+      ctx.lineWidth = 4;
+      ctx.beginPath();
+      for (let x = 0; x <= xMax; x += 0.05) {
+        const y = ropeScore(0, x);
+        if (x === 0) ctx.moveTo(xToPx(x), yToPx(y));
+        else ctx.lineTo(xToPx(x), yToPx(y));
+      }
+      ctx.stroke();
+
+      const firstPeriod = 2 * Math.PI / multiFreqs[0];
+      ctx.strokeStyle = "#facc15";
+      ctx.lineWidth = 2;
+      ctx.beginPath();
+      ctx.moveTo(xToPx(firstPeriod), pad.top);
+      ctx.lineTo(xToPx(firstPeriod), H - pad.bottom);
+      ctx.stroke();
+
+      ctx.fillStyle = "#facc15";
+      ctx.textAlign = "left";
+      ctx.textBaseline = "top";
+      ctx.fillText("fastest frequency completes 360°", xToPx(firstPeriod) + 6, pad.top + 4);
+
+      const legendX = pad.left + 8;
+      const legendY = pad.top + 4;
+      componentColors.forEach((color, idx) => {
+        ctx.fillStyle = color;
+        ctx.fillText(`freq ${multiFreqs[idx].toFixed(3)}`, legendX + idx * 115, legendY + 22);
+      });
+      ctx.fillStyle = "#34d399";
+      ctx.fillText("combined", legendX + 4 * 115, legendY + 22);
+    }
+
+    const genTokens = ["T0", "T1", "T2", "T3", "T4", "T5", "T6", "T7"];
+    const genContentAngles = [0, 0.8, 1.6, 2.4, 0.2, 1.2, 2.0, 2.8];
+    let genQuery = 5;
+    let genRope = true;
+    let genSame = true;
+
+    function renderGenButtons() {
+      const container = $("genQueryBtns");
+      container.innerHTML = "";
+      genTokens.forEach((token, i) => {
+        const button = document.createElement("button");
+        button.className = "token-btn" + (i === genQuery ? " active" : "");
+        button.textContent = `${token}`;
+        button.onclick = () => {
+          genQuery = i;
+          renderGenButtons();
+          updateGen();
+        };
+        container.appendChild(button);
+      });
+    }
+
+    function updateGen() {
+      genRope = $("genRope").checked;
+      genSame = $("genSame").checked;
+
+      const rows = genTokens.map((label, i) => {
+        const allowed = i <= genQuery;
+        const distance = genQuery - i;
+        const delta = genSame ? 0 : genContentAngles[genQuery] - genContentAngles[i];
+        const score = allowed ? (genRope ? ropeScore(delta, distance) : Math.cos(delta)) : null;
+        return { label, pos: i, distance, allowed, score, weight: 0 };
+      });
+
+      const allowedScores = rows.filter((r) => r.allowed).map((r) => r.score);
+      const weights = softmax(allowedScores);
+      let wi = 0;
+      rows.forEach((r) => {
+        if (r.allowed) r.weight = weights[wi++];
+      });
+
+      drawSequenceAttention($("genCanvas"), rows, genQuery);
+
+      let explanation;
+      if (!genRope && genSame) {
+        explanation = "No RoPE + same content: all allowed keys have the same content score, so weights are equal.";
+      } else if (!genRope) {
+        explanation = "No RoPE + different content: weights depend only on content match.";
+      } else if (genSame) {
+        explanation = "Multi-frequency RoPE + same content: distance changes the combined q/k score, so weights become distance-dependent.";
+      } else {
+        explanation = "Multi-frequency RoPE + different content: weights depend on both content match and distance.";
+      }
+      $("genExplanation").textContent = explanation;
+    }
+
+    const randomLabels = ["R0", "R1", "R2", "R3", "R4", "R5", "R6", "R7"];
+    const randomAngles = [0.7, 1.2, 1.9, 2.6, 0.4, 1.5, 2.2, 3.0];
+    let ctxMode = "A";
+    let ctxQueryIndex = 9;
+    let ctxRope = true;
+
+    function contextTokens() {
+      if (ctxMode === "A") return [...randomLabels, "Apple", "Juice"];
+      return ["Apple", "Juice", ...randomLabels];
+    }
+
+    function contextAngle(label) {
+      if (label === "Apple") return 0;
+      if (label === "Juice") return 0.1;
+      return randomAngles[Number(label.slice(1))];
+    }
+
+    function renderCtxButtons() {
+      const container = $("ctxQueryBtns");
+      container.innerHTML = "";
+      const tokens = contextTokens();
+      tokens.forEach((token, i) => {
+        const button = document.createElement("button");
+        button.className = "token-btn" + (i === ctxQueryIndex ? " active" : "");
+        button.textContent = `${token} (${i})`;
+        button.onclick = () => {
+          ctxQueryIndex = i;
+          renderCtxButtons();
+          updateCtx();
+        };
+        container.appendChild(button);
+      });
+    }
+
+    function setCtxMode(mode) {
+      ctxMode = mode;
+      ctxQueryIndex = mode === "A" ? 9 : 1;
+      $("ctxA").classList.toggle("active", mode === "A");
+      $("ctxB").classList.toggle("active", mode === "B");
+      renderCtxButtons();
+      updateCtx();
+    }
+
+    function updateCtx() {
+      ctxRope = $("ctxRope").checked;
+      const tokens = contextTokens();
+
+      const rows = tokens.map((label, i) => {
+        const allowed = i <= ctxQueryIndex;
+        const distance = ctxQueryIndex - i;
+        const delta = contextAngle(tokens[ctxQueryIndex]) - contextAngle(label);
+        const score = allowed ? (ctxRope ? ropeScore(delta, distance) : Math.cos(delta)) : null;
+        return { label, pos: i, distance, allowed, score, weight: 0 };
+      });
+
+      const allowedScores = rows.filter((r) => r.allowed).map((r) => r.score);
+      const weights = softmax(allowedScores);
+      let wi = 0;
+      rows.forEach((r) => {
+        if (r.allowed) r.weight = weights[wi++];
+      });
+
+      drawSequenceAttention($("ctxCanvas"), rows, ctxQueryIndex);
+
+      const queryLabel = tokens[ctxQueryIndex];
+      let explanation;
+      if (ctxMode === "A" && queryLabel === "Juice") {
+        explanation = "In random → Apple Juice, Juice can attend to previous random words plus Apple.";
+      } else if (ctxMode === "B" && queryLabel === "Juice") {
+        explanation = "In Apple Juice → random, Juice can only attend to Apple. Later random words cannot influence it.";
+      } else if (ctxMode === "A" && queryLabel === "Apple") {
+        explanation = "In random → Apple Juice, Apple can attend to all previous random words.";
+      } else if (ctxMode === "B" && queryLabel === "Apple") {
+        explanation = "In Apple Juice → random, Apple is first, so it has no previous context.";
+      } else {
+        explanation = "Placement changes which previous keys are available, so the attention context changes.";
+      }
+      $("ctxExplanation").textContent = explanation;
+    }
+
+    function updateAll() {
+      updateVector();
+      updatePeriod();
+      updateMulti();
+      updateGen();
+      updateCtx();
+    }
+
+    ["m", "n", "theta", "delta"].forEach((id) => $(id).addEventListener("input", () => {
+      updateVector();
+      updatePeriod();
+    }));
+    ["genRope", "genSame"].forEach((id) => $(id).addEventListener("change", updateGen));
+    $("ctxA").onclick = () => setCtxMode("A");
+    $("ctxB").onclick = () => setCtxMode("B");
+    $("ctxRope").addEventListener("change", updateCtx);
+
+    renderGenButtons();
+    setCtxMode("A");
+    updateAll();
+  </script>
+</body>
+</html>
