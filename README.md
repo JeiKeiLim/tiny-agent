@@ -68,7 +68,7 @@ tiny-agent/
   scripts/            # build_corpus.py, check_model.py, run_pretrain.py,
                       # eval_pretrain.py, visualize_tokenizer.py, run_prepare_sft.py,
                       # run_build_sft_mixture.py, run_sft.py, chat_sft.py,
-                      # run_eval_sft.py
+                      # run_eval_sft.py, serve_dashboard.py + dashboard.html
   tests/
   data/  checkpoints/ # runtime artifacts (gitignored)
 ```
@@ -225,6 +225,16 @@ uv run python scripts/chat_sft.py --checkpoint checkpoints/sft/50m/final
 ```
 
 It is for inspection only and does not expose tool calling.
+
+### Training dashboard
+
+A local web dashboard plots `run.jsonl` (the per-step trainer log) live and overlays multiple runs for comparison — e.g. a finished 1B-token pretrain run against a fresh 3B-token run:
+
+```bash
+uv run python scripts/serve_dashboard.py [--root checkpoints] [--host 127.0.0.1] [--port 8787]
+```
+
+Then open http://127.0.0.1:8787/. The page lists every `run.jsonl` under the root (newest first); check one or more to overlay their `train_loss` (solid) and `val_loss` (dashed) curves, plus a separate learning-rate panel. It auto-refreshes every 3s (1/10/30s options, pausable) so a live run keeps updating, supports a log-scale toggle and hover readouts, and lets you add any file under the root by path. Duplicate step lines left by resumed runs are deduped (last occurrence wins), and a replaced/truncated file is re-read from the start. The page is self-contained (no CDN assets) and must be opened via the server URL, not `file://`.
 
 ## Code quality
 

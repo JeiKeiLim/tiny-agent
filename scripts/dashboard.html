@@ -1,0 +1,619 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Kestrel Training Dashboard</title>
+<style>
+  :root {
+    --bg: #10141a; --panel: #171d26; --border: #2a3342; --text: #dce3ec;
+    --muted: #8b98a9; --accent: #2e86de;
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; font: 14px/1.45 -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+         background: var(--bg); color: var(--text); }
+  header { display: flex; align-items: center; gap: 14px; padding: 10px 16px;
+           border-bottom: 1px solid var(--border); background: var(--panel); flex-wrap: wrap; }
+  header h1 { font-size: 15px; margin: 0; font-weight: 600; }
+  #status { color: var(--muted); font-size: 12px; }
+  .spacer { flex: 1; }
+  label.ctl { font-size: 12px; color: var(--muted); display: flex; align-items: center; gap: 6px; }
+  select, button, input[type=text] { background: #0d1117; color: var(--text); border: 1px solid var(--border);
+           border-radius: 6px; padding: 4px 8px; font-size: 12px; }
+  button { cursor: pointer; }
+  button:hover { border-color: var(--accent); }
+  #layout { display: flex; gap: 12px; padding: 12px 16px; align-items: flex-start; }
+  #sidebar { width: 350px; min-width: 280px; background: var(--panel); border: 1px solid var(--border);
+             border-radius: 8px; padding: 10px; }
+  #sidebar h2, .chart-box h2 { font-size: 12px; text-transform: uppercase; letter-spacing: .06em;
+             color: var(--muted); margin: 4px 0 8px; }
+  .run-row { display: flex; align-items: center; gap: 8px; padding: 4px 6px; border-radius: 6px; }
+  .run-row:hover { background: #1f2733; }
+  .run-row .path { font-family: ui-monospace, monospace; font-size: 12px; overflow: hidden;
+                   text-overflow: ellipsis; white-space: nowrap; }
+  .run-row .meta { color: var(--muted); font-size: 11px; margin-left: auto; white-space: nowrap; }
+  #add-row { display: flex; gap: 6px; margin-top: 10px; }
+  #add-row input { flex: 1; min-width: 0; font-family: ui-monospace, monospace; font-size: 12px; }
+  #main { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 12px; }
+  .chart-box { background: var(--panel); border: 1px solid var(--border); border-radius: 8px; padding: 10px; }
+  canvas { width: 100%; display: block; }
+  #lossChart { height: 360px; }
+  #lrChart { height: 170px; }
+  #legend { display: flex; flex-wrap: wrap; gap: 8px; }
+  .legend-item { display: flex; align-items: center; gap: 7px; background: var(--panel);
+                 border: 1px solid var(--border); border-radius: 6px; padding: 4px 10px;
+                 cursor: pointer; font-size: 12px; }
+  .legend-item.off { opacity: .4; }
+  .line-samples { display: flex; flex-direction: column; gap: 3px; flex: none; }
+  .line-sample { width: 18px; height: 0; border-top-width: 2px; }
+  .legend-item .stats { color: var(--muted); }
+  .legend-item .err { color: #e74c3c; }
+  #tooltip { position: fixed; pointer-events: none; background: rgba(13,17,23,.95);
+             border: 1px solid var(--border); border-radius: 6px; padding: 6px 9px; font-size: 12px;
+             display: none; z-index: 10; font-family: ui-monospace, monospace; white-space: nowrap; }
+  #empty { color: var(--muted); padding: 40px; text-align: center; }
+</style>
+</head>
+<body>
+<header>
+  <h1>Kestrel Training Dashboard</h1>
+  <span id="status">loading…</span>
+  <span class="spacer"></span>
+  <label class="ctl"><input type="checkbox" id="logScale"> log scale</label>
+  <label class="ctl">refresh
+    <select id="interval">
+      <option value="1000">1s</option>
+      <option value="3000" selected>3s</option>
+      <option value="10000">10s</option>
+      <option value="30000">30s</option>
+    </select>
+  </label>
+  <button id="pauseBtn">Pause</button>
+</header>
+<div id="layout">
+  <aside id="sidebar">
+    <h2>Runs (run.jsonl under server root)</h2>
+    <div id="runList"></div>
+    <div id="add-row">
+      <input type="text" id="addPath" placeholder="add by path, e.g. pretrain/50m/run.jsonl">
+      <button id="addBtn">Add</button>
+    </div>
+    <div id="add-row">
+      <button id="clearBtn" style="flex:1">Clear all</button>
+    </div>
+  </aside>
+  <section id="main">
+    <div id="legend"></div>
+    <div class="chart-box"><h2>Loss (solid = train, dashed lighter = val)</h2><canvas id="lossChart"></canvas></div>
+    <div class="chart-box"><h2>Learning rate</h2><canvas id="lrChart"></canvas></div>
+    <div id="empty">Select one or more runs on the left to plot them.</div>
+  </section>
+</div>
+<div id="tooltip"></div>
+<script>
+"use strict";
+
+const COLORS = ["#e4572e", "#2e86de", "#2ecc71", "#9b59b6", "#f1c40f",
+                "#1abc9c", "#e84393", "#7f8c8d", "#e67e22", "#16a085"];
+
+const state = {
+  runs: new Map(),    // path -> run
+  order: [],          // paths in add order
+  paused: false,
+  intervalMs: 3000,
+  logScale: false,
+  timer: null,
+  lastUpdated: null,
+  serverError: null,
+};
+
+let colorCursor = 0;
+
+function makeRun(path) {
+  return {
+    path: path,
+    color: COLORS[(colorCursor++) % COLORS.length],
+    on: true,
+    visible: true,
+    offset: 0,
+    buf: new Uint8Array(0),
+    points: new Map(),   // step -> {t, v, lr}
+    latest: null,        // last parsed line (append order == step order)
+    error: null,
+  };
+}
+
+function addRun(path) {
+  path = path.trim();
+  if (!path || state.runs.has(path)) return;
+  const run = makeRun(path);
+  state.runs.set(path, run);
+  state.order.push(path);
+  renderRunList();
+  tick();
+}
+
+function selectedRuns() {
+  return state.order.map((p) => state.runs.get(p)).filter((r) => r.on && r.visible);
+}
+
+// ---------- data fetching ----------
+
+function concatBytes(a, b) {
+  const out = new Uint8Array(a.length + b.length);
+  out.set(a, 0);
+  out.set(b, a.length);
+  return out;
+}
+
+function num(x) {
+  return typeof x === "number" && Number.isFinite(x) ? x : null;
+}
+
+async function fetchRun(run) {
+  try {
+    const res = await fetch("/api/run?path=" + encodeURIComponent(run.path) +
+                            "&offset=" + run.offset, { cache: "no-store" });
+    if (!res.ok) { run.error = "HTTP " + res.status; return; }
+    run.error = null;
+    const chunk = new Uint8Array(await res.arrayBuffer());
+    if (chunk.length === 0) return;
+    run.buf = concatBytes(run.buf, chunk);
+    let idx = -1;
+    for (let i = run.buf.length - 1; i >= 0; i--) {
+      if (run.buf[i] === 0x0A) { idx = i; break; }
+    }
+    if (idx < 0) return; // no complete line yet
+    const complete = run.buf.slice(0, idx + 1);
+    run.buf = run.buf.slice(idx + 1);
+    const text = new TextDecoder().decode(complete);
+    for (const line of text.split("\n")) {
+      if (!line.trim()) continue;
+      let e;
+      try { e = JSON.parse(line); } catch { continue; }
+      if (typeof e.step !== "number") continue;
+      const p = { t: num(e.train_loss), v: num(e.val_loss), lr: num(e.lr) };
+      run.points.set(e.step, p); // dedupe: last occurrence wins (resume copies)
+      run.latest = { step: e.step, ...p };
+    }
+    run.offset += complete.byteLength;
+  } catch (err) {
+    run.error = String(err && err.message ? err.message : err);
+  }
+}
+
+async function tick() {
+  if (state.paused) return;
+  try {
+    const res = await fetch("/api/runs", { cache: "no-store" });
+    if (!res.ok) throw new Error("HTTP " + res.status);
+    const data = await res.json();
+    state.serverError = null;
+    const sizes = new Map(data.runs.map((r) => [r.path, r.size]));
+    renderRunList(data.runs);
+    const jobs = [];
+    for (const path of state.order) {
+      const run = state.runs.get(path);
+      if (!run.on) continue;
+      const size = sizes.get(path);
+      if (size !== undefined && size < run.offset) {
+        // File replaced or truncated (e.g. a fresh run reusing the same dir).
+        run.offset = 0;
+        run.buf = new Uint8Array(0);
+        run.points.clear();
+        run.latest = null;
+      }
+      jobs.push(fetchRun(run));
+    }
+    await Promise.all(jobs);
+    state.lastUpdated = new Date();
+  } catch (err) {
+    state.serverError = String(err && err.message ? err.message : err);
+  }
+  redraw();
+}
+
+// ---------- sidebar ----------
+
+function fmtSize(n) {
+  if (n == null) return "";
+  if (n >= 1048576) return (n / 1048576).toFixed(1) + " MB";
+  if (n >= 1024) return (n / 1024).toFixed(0) + " KB";
+  return n + " B";
+}
+
+let discovered = [];
+
+function renderRunList(list) {
+  if (list) discovered = list;
+  const el = document.getElementById("runList");
+  el.innerHTML = "";
+  const seen = new Set();
+  for (const r of discovered) {
+    seen.add(r.path);
+    el.appendChild(runRow(r.path, fmtSize(r.size)));
+  }
+  for (const path of state.order) {
+    if (!seen.has(path)) el.appendChild(runRow(path, ""));
+  }
+}
+
+function runRow(path, meta) {
+  const run = state.runs.get(path);
+  const row = document.createElement("div");
+  row.className = "run-row";
+  const cb = document.createElement("input");
+  cb.type = "checkbox";
+  cb.checked = !!run && run.on;
+  cb.addEventListener("change", () => {
+    if (cb.checked) {
+      addRun(path);
+    } else {
+      const r = state.runs.get(path);
+      if (r) r.on = false;
+      redraw();
+    }
+  });
+  const span = document.createElement("span");
+  span.className = "path";
+  span.textContent = path;
+  span.title = path;
+  row.append(cb, span);
+  if (meta) {
+    const m = document.createElement("span");
+    m.className = "meta";
+    m.textContent = meta;
+    row.appendChild(m);
+  }
+  return row;
+}
+
+// ---------- legend ----------
+
+function fmtVal(v) {
+  return v == null ? "–" : v.toFixed(3);
+}
+
+function renderLegend() {
+  const el = document.getElementById("legend");
+  el.innerHTML = "";
+  for (const path of state.order) {
+    const run = state.runs.get(path);
+    if (!run.on) continue;
+    const item = document.createElement("div");
+    item.className = "legend-item" + (run.visible ? "" : " off");
+    const lines = document.createElement("span");
+    lines.className = "line-samples";
+    const trainLine = document.createElement("span");
+    trainLine.className = "line-sample";
+    trainLine.style.borderTopStyle = "solid";
+    trainLine.style.borderTopColor = run.color;
+    const valLine = document.createElement("span");
+    valLine.className = "line-sample";
+    valLine.style.borderTopStyle = "dashed";
+    valLine.style.borderTopColor = lighten(run.color, 0.55);
+    lines.append(trainLine, valLine);
+    const name = document.createElement("span");
+    name.textContent = path;
+    item.append(lines, name);
+    const stats = document.createElement("span");
+    stats.className = "stats";
+    if (run.latest) {
+      stats.textContent = "step " + run.latest.step +
+        " · train " + fmtVal(run.latest.t) +
+        (run.latest.v != null ? " · val " + fmtVal(run.latest.v) : "");
+    } else {
+      stats.textContent = "no data yet";
+    }
+    item.appendChild(stats);
+    if (run.error) {
+      const err = document.createElement("span");
+      err.className = "err";
+      err.textContent = "⚠ " + run.error;
+      item.appendChild(err);
+    }
+    item.addEventListener("click", () => {
+      run.visible = !run.visible;
+      redraw();
+    });
+    el.appendChild(item);
+  }
+}
+
+// ---------- charts ----------
+
+function lighten(hex, f) {
+  const n = parseInt(hex.slice(1), 16);
+  const r = Math.round(((n >> 16) & 255) + (255 - ((n >> 16) & 255)) * f);
+  const g = Math.round(((n >> 8) & 255) + (255 - ((n >> 8) & 255)) * f);
+  const b = Math.round((n & 255) + (255 - (n & 255)) * f);
+  return "#" + ((1 << 24) + (r << 16) + (g << 8) + b).toString(16).slice(1);
+}
+
+function seriesFor(kind) {
+  const out = [];
+  for (const path of state.order) {
+    const run = state.runs.get(path);
+    if (!run.on || !run.visible) continue;
+    const pts = [...run.points.entries()].sort((a, b) => a[0] - b[0]);
+    if (!pts.length) continue;
+    if (kind === "loss") {
+      out.push({
+        label: path + " train", color: run.color, dash: false,
+        data: pts.map(([x, p]) => [x, p.t]).filter((p) => p[1] != null),
+      });
+      out.push({
+        label: path + " val", color: lighten(run.color, 0.55), dash: true,
+        data: pts.map(([x, p]) => [x, p.v]).filter((p) => p[1] != null),
+      });
+    } else {
+      out.push({
+        label: path + " lr", color: run.color, dash: false,
+        data: pts.map(([x, p]) => [x, p.lr]).filter((p) => p[1] != null),
+      });
+    }
+  }
+  return out;
+}
+
+function niceNum(x) {
+  const exp = Math.floor(Math.log10(x));
+  const f = x / Math.pow(10, exp);
+  let nf;
+  if (f < 1.5) nf = 1;
+  else if (f < 3.5) nf = 2;
+  else if (f < 7.5) nf = 5;
+  else nf = 10;
+  return nf * Math.pow(10, exp);
+}
+
+function niceTicks(min, max, count, log) {
+  const out = [];
+  if (log) {
+    const e0 = Math.floor(Math.log10(min));
+    const e1 = Math.ceil(Math.log10(max));
+    for (let e = e0; e <= e1; e++) {
+      for (const f of [1, 2, 5]) {
+        const v = f * Math.pow(10, e);
+        if (v >= min && v <= max) out.push(v);
+      }
+    }
+    return out;
+  }
+  const step = niceNum((max - min) / Math.max(1, count));
+  for (let v = Math.ceil(min / step) * step; v <= max + step * 1e-6; v += step) out.push(v);
+  return out;
+}
+
+function fmtNum(v) {
+  if (v === 0) return "0";
+  const a = Math.abs(v);
+  if (a >= 1000) return (v / 1000).toFixed(0) + "k";
+  if (a >= 100) return v.toFixed(0);
+  if (a >= 1) return v.toFixed(a >= 10 ? 1 : 2);
+  if (a >= 0.01) return v.toFixed(3);
+  return v.toExponential(1);
+}
+
+function fmtStep(v) {
+  if (Math.abs(v) >= 1e6) return (v / 1e6).toFixed(1) + "M";
+  if (Math.abs(v) >= 1e3) return (v / 1e3).toFixed(1) + "k";
+  return String(Math.round(v));
+}
+
+function downsample(data, maxPts) {
+  if (data.length <= maxPts) return data;
+  const stride = Math.ceil(data.length / maxPts);
+  const out = [];
+  for (let i = 0; i < data.length; i += stride) out.push(data[i]);
+  const last = data[data.length - 1];
+  if (out[out.length - 1] !== last) out.push(last);
+  return out;
+}
+
+function drawChart(canvas, series, opts) {
+  const dpr = window.devicePixelRatio || 1;
+  const w = canvas.clientWidth || 600;
+  const h = canvas.clientHeight || 200;
+  if (canvas.width !== Math.round(w * dpr) || canvas.height !== Math.round(h * dpr)) {
+    canvas.width = Math.round(w * dpr);
+    canvas.height = Math.round(h * dpr);
+  }
+  const ctx = canvas.getContext("2d");
+  ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+  ctx.clearRect(0, 0, w, h);
+  canvas._scale = null;
+  if (!series.length) return;
+
+  const m = { l: 58, r: 14, t: 12, b: 26 };
+  let xmin = Infinity, xmax = -Infinity, ymin = Infinity, ymax = -Infinity;
+  for (const s of series) {
+    for (const [x, y] of s.data) {
+      if (x < xmin) xmin = x;
+      if (x > xmax) xmax = x;
+      if (y < ymin) ymin = y;
+      if (y > ymax) ymax = y;
+    }
+  }
+  const padY = (ymax - ymin) * 0.06 || 1;
+  ymin -= padY;
+  ymax += padY;
+  if (opts.log) ymin = Math.max(ymin, 1e-9);
+  if (xmax === xmin) { xmin -= 1; xmax += 1; }
+
+  const log = opts.log && ymin > 0;
+  const y0 = log ? Math.log10(ymin) : ymin;
+  const y1 = log ? Math.log10(ymax) : ymax;
+  const X = (x) => m.l + ((x - xmin) / (xmax - xmin)) * (w - m.l - m.r);
+  const Y = (y) => h - m.b - (((log ? Math.log10(y) : y) - y0) / (y1 - y0)) * (h - m.t - m.b);
+  canvas._scale = { xmin: xmin, xmax: xmax, m: m, w: w, h: h };
+
+  ctx.font = "11px ui-monospace, monospace";
+  ctx.lineWidth = 1;
+  ctx.strokeStyle = "#232c3a";
+  ctx.fillStyle = "#8b98a9";
+  for (const t of niceTicks(ymin, ymax, 5, log)) {
+    const py = Y(t);
+    ctx.beginPath();
+    ctx.moveTo(m.l, py);
+    ctx.lineTo(w - m.r, py);
+    ctx.stroke();
+    ctx.fillText(fmtNum(t), 6, py + 3);
+  }
+  for (const t of niceTicks(xmin, xmax, 6, false)) {
+    if (t < xmin || t > xmax) continue;
+    const px = X(t);
+    ctx.beginPath();
+    ctx.moveTo(px, m.t);
+    ctx.lineTo(px, h - m.b);
+    ctx.stroke();
+    ctx.fillText(fmtStep(t), px - 14, h - 8);
+  }
+
+  for (const s of series) {
+    const data = downsample(s.data, 2000);
+    ctx.strokeStyle = s.color;
+    ctx.globalAlpha = 1;
+    ctx.lineWidth = s.dash ? 1.5 : 1.8;
+    ctx.setLineDash(s.dash ? [6, 4] : []);
+    ctx.beginPath();
+    let started = false;
+    for (const [x, y] of data) {
+      const px = X(x);
+      const py = Y(y);
+      if (!started) { ctx.moveTo(px, py); started = true; }
+      else ctx.lineTo(px, py);
+    }
+    ctx.stroke();
+    ctx.setLineDash([]);
+    ctx.globalAlpha = 1;
+  }
+}
+
+function nearestPoint(data, x) {
+  if (!data.length) return null;
+  let lo = 0, hi = data.length - 1;
+  while (hi - lo > 1) {
+    const mid = (lo + hi) >> 1;
+    if (data[mid][0] < x) lo = mid;
+    else hi = mid;
+  }
+  const a = data[lo], b = data[hi];
+  return (x - a[0] <= b[0] - x) ? a : b;
+}
+
+function setupHover(canvas, kind) {
+  const tip = document.getElementById("tooltip");
+  canvas.addEventListener("mousemove", (ev) => {
+    const sc = canvas._scale;
+    if (!sc) { tip.style.display = "none"; return; }
+    const rect = canvas.getBoundingClientRect();
+    const px = ev.clientX - rect.left;
+    if (px < sc.m.l || px > sc.w - sc.m.r) { tip.style.display = "none"; return; }
+    const step = sc.xmin + ((px - sc.m.l) / (sc.w - sc.m.l - sc.m.r)) * (sc.xmax - sc.xmin);
+    const series = seriesFor(kind);
+    const rows = ["step ≈ " + fmtStep(step)];
+    for (const s of series) {
+      const p = nearestPoint(s.data, step);
+      if (!p) continue;
+      rows.push({ color: s.color, text: s.label + "  " + fmtNum(p[1]) + " @ " + fmtStep(p[0]) });
+    }
+    if (rows.length < 2) { tip.style.display = "none"; return; }
+    tip.innerHTML = "";
+    for (const r of rows) {
+      const div = document.createElement("div");
+      if (typeof r === "string") {
+        div.style.color = "#8b98a9";
+        div.textContent = r;
+      } else {
+        div.innerHTML = '<span style="color:' + r.color + '">●</span> ' + r.text;
+      }
+      tip.appendChild(div);
+    }
+    tip.style.display = "block";
+    const pad = 14;
+    const tw = tip.offsetWidth, th = tip.offsetHeight;
+    let left = ev.clientX + pad;
+    if (left + tw > window.innerWidth - 4) left = ev.clientX - pad - tw;
+    let top = ev.clientY + pad;
+    if (top + th > window.innerHeight - 4) top = ev.clientY - pad - th;
+    tip.style.left = Math.max(4, left) + "px";
+    tip.style.top = Math.max(4, top) + "px";
+  });
+  canvas.addEventListener("mouseleave", () => { tip.style.display = "none"; });
+}
+
+// ---------- status / redraw / controls ----------
+
+function setStatus(msg) {
+  document.getElementById("status").textContent = msg;
+}
+
+function redraw() {
+  const lossSeries = seriesFor("loss");
+  const lrSeries = seriesFor("lr");
+  drawChart(document.getElementById("lossChart"), lossSeries, { log: state.logScale });
+  drawChart(document.getElementById("lrChart"), lrSeries, { log: false });
+  renderLegend();
+  document.getElementById("empty").style.display =
+    (lossSeries.length || lrSeries.length) ? "none" : "block";
+  if (state.serverError) {
+    setStatus("⚠ " + state.serverError +
+      " — start the server: uv run python scripts/serve_dashboard.py, then open http://127.0.0.1:8787/");
+    return;
+  }
+  const n = state.order.filter((p) => state.runs.get(p).on).length;
+  const when = state.lastUpdated ? state.lastUpdated.toLocaleTimeString() : "—";
+  setStatus((state.paused ? "paused" : "live") + " · " + n + " run(s) · updated " + when);
+}
+
+function schedule() {
+  if (state.timer) clearInterval(state.timer);
+  state.timer = null;
+  if (!state.paused) state.timer = setInterval(tick, state.intervalMs);
+}
+
+document.getElementById("pauseBtn").addEventListener("click", (ev) => {
+  state.paused = !state.paused;
+  ev.target.textContent = state.paused ? "Resume" : "Pause";
+  schedule();
+  if (!state.paused) tick();
+  redraw();
+});
+document.getElementById("interval").addEventListener("change", (ev) => {
+  state.intervalMs = parseInt(ev.target.value, 10);
+  schedule();
+});
+document.getElementById("logScale").addEventListener("change", (ev) => {
+  state.logScale = ev.target.checked;
+  redraw();
+});
+document.getElementById("addBtn").addEventListener("click", () => {
+  const input = document.getElementById("addPath");
+  addRun(input.value);
+  input.value = "";
+});
+document.getElementById("addPath").addEventListener("keydown", (ev) => {
+  if (ev.key === "Enter") {
+    addRun(ev.target.value);
+    ev.target.value = "";
+  }
+});
+document.getElementById("clearBtn").addEventListener("click", () => {
+  state.order = [];
+  state.runs.clear();
+  colorCursor = 0;
+  renderRunList();
+  redraw();
+});
+window.addEventListener("resize", () => redraw());
+
+setupHover(document.getElementById("lossChart"), "loss");
+setupHover(document.getElementById("lrChart"), "lr");
+renderRunList();
+redraw();
+tick();
+schedule();
+</script>
+</body>
+</html>
