@@ -57,7 +57,7 @@ warn_redundant_casts = true
 warn_unused_ignores = true
 
 [[tool.mypy.overrides]]
-module = ["mlx.*", "tokenizers.*", "datasets.*", "truststore.*"]
+module = ["mlx.*", "tokenizers.*", "datasets.*", "truststore.*", "pyarrow.*"]
 ignore_missing_imports = true
 
 # MLX ships type stubs for mlx.core but none for mlx.nn, so mypy otherwise

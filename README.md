@@ -63,12 +63,13 @@ tiny-agent/
     data/             # tokenizer/pretrain/SFT datasets, chat rendering, SFT source prep/mixture
     train/            # trainer.py, pretrain.py, sft.py, checkpoint.py, rl/ (empty)
     tools/            # schema_sampler.py
-    eval/             # pretrain.py, sft.py, tool_calling.py (checkpoint evaluation + SFT scorecard)
+    eval/             # pretrain.py, pretrain_benchmarks.py, sft.py, tool_calling.py
     peft/  env/  agent/  serve/   # planned (empty packages)
   scripts/            # build_corpus.py, check_model.py, run_pretrain.py,
-                      # eval_pretrain.py, visualize_tokenizer.py, run_prepare_sft.py,
-                      # run_build_sft_mixture.py, run_sft.py, chat_sft.py,
-                      # run_eval_sft.py, serve_dashboard.py + dashboard.html
+                      # eval_pretrain.py, download_pretrain_eval_datasets.py,
+                      # run_eval_pretrain_benchmarks.py, visualize_tokenizer.py,
+                      # run_prepare_sft.py, run_build_sft_mixture.py, run_sft.py,
+                      # chat_sft.py, run_eval_sft.py, serve_dashboard.py + dashboard.html
   tests/
   data/  checkpoints/ # runtime artifacts (gitignored)
 ```
@@ -167,6 +168,33 @@ uv run python scripts/eval_pretrain.py \
 ```
 
 The report includes token-weighted loss, perplexity, bits/token, evaluated tokens, and per-domain loss for `web`, `code`, and `synthetic`. `--max-tokens 0` evaluates the full split, `--json` emits machine-readable output, and `--generate` adds fixed greedy samples. Progress is printed to stderr every `--progress-every-tokens` tokens (default 100000, `0` disables) and includes an estimated percentage when the corpus manifest provides token totals, so `--json` stdout stays parseable. The command is read-only and can be run against a complete checkpoint while training continues.
+
+### Pretrain eval datasets
+
+A helper script downloads the standard pretrain evaluation splits for external comparison:
+
+```bash
+uv run python scripts/download_pretrain_eval_datasets.py --data-dir /path/to/datasets
+uv run python scripts/download_pretrain_eval_datasets.py --data-dir /path/to/datasets --skip-large
+uv run python scripts/download_pretrain_eval_datasets.py --data-dir /path/to/datasets --only hellaswag,piqa
+```
+
+The script downloads raw evaluation files only, not training splits, and avoids building the full Hugging Face dataset cache. `--skip-large` omits the large C4 validation and Pile test language-modeling sets.
+
+### Pretrain benchmark evaluation
+
+After downloading the eval datasets, a saved pretrain checkpoint can be scored against the local benchmark files:
+
+```bash
+uv run python scripts/run_eval_pretrain_benchmarks.py \
+  --pretrain-config configs/kestrel/50m/pretrain.yaml \
+  --checkpoint checkpoints/pretrain/50m/best \
+  --data-dir /path/to/datasets \
+  --max-tokens 100000 \
+  --max-examples 200
+```
+
+The evaluator reads raw Parquet/JSONL files directly, reports BPB for language-modeling sets and zero-shot multiple-choice accuracy for task sets, and writes a JSON scorecard. Use `--only`, `--skip-large`, `--allow-missing`, and `--json` to control the run.
 
 ### SFT data prep
 
