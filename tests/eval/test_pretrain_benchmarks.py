@@ -7,7 +7,7 @@ import json
 import math
 import sys
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 
 import pyarrow as pa
 import pyarrow.parquet as pq
@@ -16,6 +16,7 @@ import yaml
 
 from kestrel.eval.pretrain_benchmarks import (
     BpbAccumulator,
+    _offset_byte_prefix,
     benchmark_names,
     evaluate_language_modeling,
     evaluate_multiple_choice,
@@ -195,6 +196,40 @@ def test_bpb_accumulator_derived_values() -> None:
     assert acc.perplexity == pytest.approx(8.0 ** (1.0 / 8.0))
     assert acc.bits_per_token == pytest.approx(math.log(8.0) / 8.0 / math.log(2.0))
     assert acc.bpb == pytest.approx(math.log(8.0) / (math.log(2.0) * 32.0))
+
+
+def test_offset_byte_prefix_materializes_offsets_once() -> None:
+    from tokenizers import Encoding
+
+    class CountingEncoding:
+        def __init__(self) -> None:
+            self.ids = [1, 2, 3]
+            self._offsets = [(0, 1), (1, 3), (3, 4)]
+            self.accesses = 0
+
+        @property
+        def offsets(self) -> list[tuple[int, int]]:
+            self.accesses += 1
+            return self._offsets
+
+    encoding = CountingEncoding()
+    prefix = _offset_byte_prefix(cast(Encoding, encoding))
+
+    assert prefix == [0, 1, 3, 4]
+    assert encoding.accesses == 1
+
+
+def test_offset_byte_prefix_matches_text_length(bench_env: dict[str, Any]) -> None:
+    from tokenizers import Tokenizer
+
+    tokenizer = Tokenizer.from_file(bench_env["config"].tokenizer)
+    text = BASE * 4
+    encoding = tokenizer.encode(text, add_special_tokens=False)
+    prefix = _offset_byte_prefix(encoding)
+
+    assert prefix[0] == 0
+    assert len(prefix) == len(encoding.ids) + 1
+    assert prefix[-1] == len(text)
 
 
 def test_parse_only_rejects_unknown_names() -> None:

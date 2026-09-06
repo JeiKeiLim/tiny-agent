@@ -23,7 +23,7 @@ import mlx.core as mx
 import mlx.nn as nn
 import pyarrow.parquet as pq
 from mlx.nn.losses import cross_entropy
-from tokenizers import Tokenizer
+from tokenizers import Encoding, Tokenizer
 
 from kestrel.common.config import load_config
 from kestrel.model.config import ModelConfig
@@ -408,6 +408,7 @@ def _continuation_logprob(
     if not original_ids:
         return None
 
+    offsets = encoding.offsets
     drop = max(0, len(original_ids) - max_length)
     ids = original_ids[drop:]
     x = mx.array([ids], dtype=mx.int32)
@@ -418,7 +419,7 @@ def _continuation_logprob(
     total = 0.0
     count = 0
     for new_index, old_index in enumerate(range(drop, len(original_ids))):
-        end = int(encoding.offsets[old_index][1])
+        end = int(offsets[old_index][1])
         if end <= context_length:
             continue
         if new_index == 0:
@@ -428,6 +429,13 @@ def _continuation_logprob(
     if count == 0:
         return None
     return total, count
+
+
+def _offset_byte_prefix(encoding: Encoding) -> list[int]:
+    prefix = [0]
+    for start_offset, end_offset in encoding.offsets:
+        prefix.append(prefix[-1] + int(end_offset) - int(start_offset))
+    return prefix
 
 
 def _format_progress(acc: BpbAccumulator, examples: int) -> str:
@@ -464,6 +472,7 @@ def evaluate_language_modeling(
         if not ids:
             continue
 
+        byte_prefix = _offset_byte_prefix(encoding)
         acc.examples += 1
         start = 0
         while start < len(ids):
@@ -477,10 +486,7 @@ def evaluate_language_modeling(
                 break
 
             chunk = ids[start:end]
-            chunk_bytes = sum(
-                int(encoding.offsets[index][1]) - int(encoding.offsets[index][0])
-                for index in range(start, end)
-            )
+            chunk_bytes = byte_prefix[end] - byte_prefix[start]
             x = mx.array([chunk], dtype=mx.int32)
             target = mx.array([chunk[1:]], dtype=mx.int32)
             logits = model(x)
