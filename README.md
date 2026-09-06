@@ -194,7 +194,7 @@ uv run python scripts/run_eval_pretrain_benchmarks.py \
   --max-examples 200
 ```
 
-The evaluator reads raw Parquet/JSONL files directly, reports BPB for language-modeling sets and zero-shot multiple-choice accuracy for task sets, and writes a JSON scorecard. Use `--only`, `--skip-large`, `--allow-missing`, and `--json` to control the run.
+The evaluator reads raw Parquet/JSONL files directly, reports BPB for language-modeling sets and zero-shot multiple-choice accuracy for task sets, and writes a JSON scorecard. Use `--only`, `--skip-large`, `--allow-missing`, and `--json` to control the run. By default it releases the MLX allocator cache every 64 model forwards via `--clear-cache-every`; use `0` to disable periodic clearing.
 
 ### SFT data prep
 

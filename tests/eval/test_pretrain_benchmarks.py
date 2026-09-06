@@ -315,6 +315,45 @@ def test_evaluate_multiple_choice_reports_accuracy(bench_env: dict[str, Any]) ->
     assert 0.0 <= result.metrics["acc_norm"] <= 100.0
 
 
+def test_benchmark_evaluator_clears_cache(
+    bench_env: dict[str, Any], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    import mlx.core as mx
+    from tokenizers import Tokenizer
+
+    config = bench_env["config"]
+    model = Kestrel(_tiny_model_config())
+    model.load_weights(str(bench_env["checkpoint"] / "weights.npz"))
+    tokenizer = Tokenizer.from_file(config.tokenizer)
+
+    calls: list[int] = []
+    monkeypatch.setattr(mx, "clear_cache", lambda: calls.append(1), raising=False)
+
+    evaluate_language_modeling(
+        model,
+        tokenizer,
+        bench_env["data_dir"] / "wikitext2",
+        name="wikitext2",
+        text_field="page",
+        context_length=16,
+        max_tokens=16,
+        clear_cache_every=1,
+    )
+    assert calls
+
+    calls.clear()
+    evaluate_multiple_choice(
+        model,
+        tokenizer,
+        bench_env["data_dir"] / "hellaswag",
+        name="hellaswag",
+        context_length=16,
+        max_examples=1,
+        clear_cache_every=1,
+    )
+    assert calls
+
+
 def test_evaluate_selected_benchmarks_writes_scorecard(bench_env: dict[str, Any]) -> None:
     scorecard = evaluate_selected_benchmarks(
         pretrain_config=bench_env["config"],

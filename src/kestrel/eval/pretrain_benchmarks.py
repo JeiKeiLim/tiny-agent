@@ -445,10 +445,12 @@ def evaluate_language_modeling(
     max_tokens: int | None = None,
     max_examples: int | None = None,
     progress_every_tokens: int = 0,
+    clear_cache_every: int = 64,
 ) -> BenchmarkResult:
     """Evaluate BPB over local text rows."""
     acc = BpbAccumulator()
     next_progress = progress_every_tokens
+    forward_count = 0
 
     for row in iter_rows(dataset_dir):
         if max_examples is not None and acc.examples >= max_examples:
@@ -488,6 +490,9 @@ def evaluate_language_modeling(
             acc.nats += cast(float, loss_sum.item())
             acc.tokens += evaluated_tokens
             acc.bytes += chunk_bytes
+            forward_count += 1
+            if clear_cache_every > 0 and forward_count % clear_cache_every == 0:
+                mx.clear_cache()
 
             if progress_every_tokens > 0 and acc.tokens >= next_progress:
                 print(
@@ -532,6 +537,7 @@ def evaluate_multiple_choice(
     max_examples: int | None = None,
     seed: int = 0,
     progress_every: int = 0,
+    clear_cache_every: int = 64,
 ) -> BenchmarkResult:
     """Evaluate zero-shot multiple-choice accuracy."""
     correct = 0
@@ -539,6 +545,7 @@ def evaluate_multiple_choice(
     examples = 0
     tokens = 0
     next_progress = progress_every
+    forward_count = 0
 
     for row in iter_rows(dataset_dir):
         if max_examples is not None and examples >= max_examples:
@@ -558,6 +565,9 @@ def evaluate_multiple_choice(
                 choice,
                 max_length=context_length,
             )
+            forward_count += 1
+            if clear_cache_every > 0 and forward_count % clear_cache_every == 0:
+                mx.clear_cache()
             if result is None:
                 scores.append(float("-inf"))
                 norm_scores.append(float("-inf"))
@@ -617,6 +627,7 @@ def evaluate_selected_benchmarks(
     seed: int = 0,
     allow_missing: bool = False,
     progress_every_tokens: int = 0,
+    clear_cache_every: int = 64,
 ) -> BenchmarkScorecard:
     """Evaluate selected local benchmarks and return a scorecard."""
     checkpoint_path = Path(checkpoint)
@@ -667,6 +678,7 @@ def evaluate_selected_benchmarks(
                     max_tokens=max_tokens,
                     max_examples=max_examples,
                     progress_every_tokens=progress_every_tokens,
+                    clear_cache_every=clear_cache_every,
                 )
             elif spec.kind == MCQ_KIND:
                 result = evaluate_multiple_choice(
@@ -678,6 +690,7 @@ def evaluate_selected_benchmarks(
                     max_examples=max_examples,
                     seed=seed,
                     progress_every=progress_every_tokens,
+                    clear_cache_every=clear_cache_every,
                 )
             else:
                 msg = f"unknown benchmark kind: {spec.kind}"

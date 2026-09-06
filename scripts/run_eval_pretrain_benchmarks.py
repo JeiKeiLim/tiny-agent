@@ -121,6 +121,12 @@ def main() -> None:
         help="progress interval for LM evaluation (0 disables; default: %(default)s)",
     )
     parser.add_argument(
+        "--clear-cache-every",
+        type=int,
+        default=64,
+        help="release MLX cache every N forwards (0 disables; default: %(default)s)",
+    )
+    parser.add_argument(
         "--output",
         default=DEFAULT_OUTPUT,
         help="scorecard JSON output path (default: %(default)s)",
@@ -138,6 +144,8 @@ def main() -> None:
         parser.error("--max-examples must be > 0")
     if args.progress_every_tokens < 0:
         parser.error("--progress-every-tokens must be >= 0")
+    if args.clear_cache_every < 0:
+        parser.error("--clear-cache-every must be >= 0")
 
     config_path = Path(args.pretrain_config)
     if not config_path.is_file():
@@ -160,6 +168,7 @@ def main() -> None:
             seed=args.seed,
             allow_missing=args.allow_missing,
             progress_every_tokens=args.progress_every_tokens,
+            clear_cache_every=args.clear_cache_every,
         )
         output_path = write_scorecard(scorecard, args.output)
     except (FileNotFoundError, ValueError) as exc:
