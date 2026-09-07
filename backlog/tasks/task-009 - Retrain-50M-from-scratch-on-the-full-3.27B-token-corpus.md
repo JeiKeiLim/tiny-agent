@@ -4,7 +4,7 @@ title: Retrain 50M from scratch on the full 3.27B-token corpus
 status: In Progress
 assignee: []
 created_date: '2026-09-01 05:25'
-updated_date: '2026-09-01 05:31'
+updated_date: '2026-09-07 08:02'
 labels:
   - pretraining
   - 50m
@@ -16,6 +16,13 @@ documentation:
   - >-
     backlog/docs/research/pretrain-token-budget/doc-005 -
     50M-Pretrain-Token-Budget-and-3B-Continuation-Research.md
+  - >-
+    backlog/docs/research/pretrain-benchmarks/doc-012 -
+    50M-1B-vs-3B-Pretrain-Benchmark-Result.md
+modified_files:
+  - >-
+    backlog/docs/research/pretrain-benchmarks/doc-012 -
+    50M-1B-vs-3B-Pretrain-Benchmark-Result.md
 priority: high
 ordinal: 58000
 ---
@@ -63,4 +70,42 @@ Gotchas:
 
 <!-- SECTION:NOTES:BEGIN -->
 Baseline recorded 2026-09-01 (AC #2 done): eval_pretrain.py on checkpoints/pretrain/50m/final (1B run final) -> val mixed loss 3.183922, ppl 24.14 (106,392 tokens). Per-domain: web 3.260366, code 1.980641, synthetic 2.724424. Target for the 3.27B final: mixed val loss <= 3.0839 (>=0.1 nats improvement).
+
+External benchmark scorecards analyzed 2026-09-07:
+- 1B scorecard: data/pretrain_eval/scorecard_50m_1b.json, checkpoint checkpoints/pretrain/50m/final
+- 3B scorecard: data/pretrain_eval/scorecard_50m_3b.json, checkpoint checkpoints/pretrain/50m-3b/best
+
+LM deltas, 3B best vs 1B final:
+- Pile test BPB 1.3863 -> 1.3302, delta -0.0561
+- C4 validation BPB 1.2775 -> 1.2367, delta -0.0408
+- WikiText BPB 1.3652 -> 1.3175, delta -0.0477
+- LAMBADA BPB 1.5035 -> 1.4706, delta -0.0329
+- token-weighted unique LM loss 3.3784 -> 3.2520, delta -0.1264
+- token-weighted unique LM BPB 1.3457 -> 1.2953, delta -0.0504
+
+MC deltas, 3B best vs 1B final:
+- unweighted acc 33.52 -> 34.07, delta +0.55
+- unweighted acc_norm 35.77 -> 35.76, delta -0.01
+- PIQA +1.85, HellaSwag +0.44, ARC-Easy +0.76, MMLU +0.38
+- WinoGrande -0.95 and OpenBookQA acc_norm -2.6 are within small-set noise
+
+In-loop validation comparison:
+- 1B final state best_val_loss 3.1583
+- 3B best best_val_loss 3.0213
+- delta 0.1370 nats
+- versus recorded 1B eval_pretrain baseline 3.1839, delta 0.1626
+- this is inside the doc-005 planned 0.1-0.3 nat improvement range
+
+Public anchor interpretation:
+- Kestrel-50M at 3.13B tokens is not in the same token budget as public anchors in doc-004, which mostly used 300B-6T tokens.
+- The 3B 50M result is broadly in the Pythia-70M neighborhood on PIQA and ARC-Challenge, but still below Pythia-70M on ARC-Easy and WinoGrande.
+- GPT-2 124M Pile BPB anchor is 1.2253; Kestrel 3B token-weighted unique LM BPB is 1.2953, about 0.070 BPB higher, with GPT-2 using more params and a much larger token budget.
+
+Caveats:
+- wikitext103 is identical to wikitext2 in these scorecards, so treat WikiText as one result.
+- LAMBADA is reported as BPB, not final-token accuracy.
+- scorecards contain a local data_dir value and should not be committed without redaction.
+- the 3B scorecard uses best, not final, because final was degraded by the late code-only training suffix.
+
+Benchmark result documented in doc-012: 50M 1B vs 3B Pretrain Benchmark Result. Interpretation: positive learning-pipeline result, 3B best is the new 50M pretrain reference, public-model comparison is favorable once token budget is considered.
 <!-- SECTION:NOTES:END -->
